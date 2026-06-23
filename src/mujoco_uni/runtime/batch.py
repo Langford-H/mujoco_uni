@@ -1,0 +1,677 @@
+"""Batched environment pool backed by a persistent per-env mjModel pool.
+
+This module wraps the pybind-backed ``_batch_env`` C++ module. The pool
+owns:
+  * ``nbatch`` ``mjModel`` instances (cloned from one caller-supplied
+    model, or from a caller-supplied compatible model sequence, via
+    ``mj_copyModel``),
+  * per-thread ``mjData`` workers,
+  * an internal thread pool.
+
+It exposes three execution primitives:
+
+  * :meth:`BatchEnvPool.step` — multi-step ``mj_step`` over the full
+    env pool. Returns only the **final** state, and can optionally also
+    return the final-step sensordata
+    (``(nbatch, nstate)`` / ``(nbatch, nsensordata)``), not trajectories.
+
+  * :meth:`BatchEnvPool.forward` — single ``mj_forward`` over all envs.
+    Returns only ``sensordata``.
+
+  * :meth:`BatchEnvPool.reset` — fused sparse reset over a subset of
+    envs with optional per-env model field patching and selective
+    ``mj_setConst`` refresh.
+
+  * :meth:`BatchEnvPool.sample_hfield_height` — MuJoCo hfield-only
+    yaw/body/world aligned bilinear terrain sampling over the full env pool.
+
+Supported randomization fields are listed in ``SUPPORTED_FIELDS``.
+"""
+
+from __future__ import annotations
+
+import numbers
+import re
+from typing import Any, Dict, Optional, Sequence, Union
+
+import mujoco
+import numpy as np
+
+from mujoco_uni.version import MUJOCO_VERSION, MUJOCO_VERSION_SPEC, __version__
+
+
+def _check_mujoco_compatibility() -> None:
+  version = getattr(mujoco, "__version__", "")
+  match = re.match(r"^(\d+)\.(\d+)\.(\d+)(?:\.|$)", version)
+  if match is None:
+    raise ImportError(f"Unsupported MuJoCo version string: {version!r}")
+  parsed = tuple(int(match.group(i)) for i in range(1, 4))
+  expected = tuple(int(part) for part in MUJOCO_VERSION.split("."))
+  if parsed != expected:
+    raise ImportError(
+        f"mujoco_uni {__version__} targets official mujoco{MUJOCO_VERSION_SPEC}; "
+        f"found mujoco {version!r}"
+    )
+  if not hasattr(mujoco.MjModel, "_address"):
+    raise ImportError("mujoco.MjModel._address is required by mujoco_uni")
+  if not hasattr(mujoco.MjModel, "_from_model_ptr"):
+    raise ImportError("mujoco.MjModel._from_model_ptr is required by mujoco_uni")
+
+
+_check_mujoco_compatibility()
+
+from mujoco_uni.compiled import require_native
+
+_native = require_native()
+
+
+SUPPORTED_FIELDS = tuple(_native.SUPPORTED_FIELDS)
+_FIELD_COMPONENT_WIDTHS = {
+    "body_mass": 1,
+    "body_ipos": 3,
+    "body_iquat": 4,
+    "body_inertia": 3,
+    "dof_armature": 1,
+    "gravity": 3,
+    "geom_friction": 3,
+    "kp": 1,
+    "kd": 1,
+}
+
+
+def _normalize_indices(indices) -> tuple[np.ndarray, bool]:
+  if isinstance(indices, (bool, np.bool_)):
+    raise TypeError("indices must be an int or a 1-D sequence of ints")
+  if isinstance(indices, numbers.Integral):
+    return np.asarray([int(indices)], dtype=np.int32), True
+  if isinstance(indices, (str, bytes)):
+    raise TypeError("indices must be an int or a 1-D sequence of ints")
+
+  arr = np.asarray(indices)
+  if arr.ndim != 1:
+    raise ValueError(f"indices must be 1-D, got shape {arr.shape}")
+  if arr.dtype.kind not in ("i", "u"):
+    raise TypeError("indices must contain integers")
+  return np.ascontiguousarray(arr, dtype=np.int32), False
+
+
+def _normalize_scalar_int(name: str, value) -> int:
+  if isinstance(value, (bool, np.bool_)):
+    raise TypeError(f"{name} must be an integer id")
+  if not isinstance(value, numbers.Integral):
+    raise TypeError(f"{name} must be an integer id")
+  return int(value)
+
+
+def _normalize_indexed_value(name: str, scalar_index: bool, nindex: int, value):
+  width = _FIELD_COMPONENT_WIDTHS[name]
+  arr = np.asarray(value, dtype=np.float64)
+  expected_shape = (
+      ()
+      if scalar_index and width == 1
+      else (width,)
+      if scalar_index
+      else (nindex,)
+      if width == 1
+      else (nindex, width)
+  )
+  if arr.shape != expected_shape:
+    raise ValueError(
+        f"value for field '{name}' must have shape {expected_shape}, "
+        f"got {arr.shape}"
+    )
+  return np.ascontiguousarray(arr.reshape(-1), dtype=np.float64)
+
+
+class BatchEnvPool:
+  """Persistent per-environment model pool with step / forward / reset."""
+
+  def __init__(
+      self,
+      model: Union[mujoco.MjModel, Sequence[mujoco.MjModel]],
+      *,
+      nbatch: int,
+      nthread: Optional[int] = None,
+  ):
+    """Construct a batch pool from one model or a compatible model sequence.
+
+    Args:
+      model: A single ``MjModel`` to clone across the pool, or a compatible
+        sequence of ``MjModel`` instances with length ``1`` or ``nbatch``.
+      nbatch: Number of environments in the pool.
+      nthread: Number of worker threads. ``None`` means ``0``.
+    """
+    if nbatch <= 0:
+      raise ValueError("nbatch must be positive")
+    if not isinstance(model, mujoco.MjModel):
+      model = list(model)
+    self._nthread = 0 if nthread is None else int(nthread)
+    self._pool = _native.BatchEnvPool(
+        model=model, nbatch=int(nbatch), nthread=self._nthread
+    )
+
+  def __enter__(self) -> "BatchEnvPool":
+    return self
+
+  def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+    self.close()
+
+  def close(self) -> None:
+    if self._pool is not None:
+      del self._pool
+      self._pool = None
+
+  # -- introspection --------------------------------------------------
+  @property
+  def nbatch(self) -> int:
+    return self._pool.nbatch
+
+  @property
+  def nthread(self) -> int:
+    return self._pool.nthread
+
+  @property
+  def nstate(self) -> int:
+    return self._pool.nstate
+
+  @property
+  def nv(self) -> int:
+    return self._pool.nv
+
+  @property
+  def nsensordata(self) -> int:
+    return self._pool.nsensordata
+
+  def get_all_models(self) -> list[mujoco.MjModel]:
+    """Return pool-owned models without copying.
+
+    Returned model objects are valid while the pool remains open.
+    """
+    if self._pool is None:
+      raise RuntimeError("get_all_models requested after pool close")
+    return self._pool.get_all_models()
+
+  def get_model(
+      self, env_ids: int | Sequence[int]
+  ) -> mujoco.MjModel | list[mujoco.MjModel]:
+    """Return one or more pool-owned models without copying.
+
+    Returned model objects are valid while the pool remains open.
+    """
+    if self._pool is None:
+      raise RuntimeError("get_model requested after pool close")
+    env_ids_arr, scalar_index = _normalize_indices(env_ids)
+    if scalar_index:
+      return self._pool.get_model(int(env_ids_arr[0]))
+    return self._pool.get_models(env_ids_arr)
+
+  # -- step -----------------------------------------------------------
+  def step(
+      self,
+      initial_state,
+      *,
+      nstep: int,
+      control_spec: int = int(mujoco.mjtState.mjSTATE_CTRL),
+      control=None,
+      initial_warmstart=None,
+      chunk_size: Optional[int] = None,
+      return_sensor: bool = False,
+      post_step_forward_sensor: bool = False,
+  ):
+    """Run ``nstep`` of ``mj_step`` on every environment.
+
+    Returns only the **final** state after all steps by default. When
+    ``return_sensor`` is true, returns ``(state, sensordata)`` where
+    ``sensordata`` is only the final step's sensor data, not a trajectory.
+
+    Args:
+      initial_state: ``(nbatch, nstate)`` full-physics initial states.
+      nstep: number of steps.
+      control_spec: MuJoCo ``mjtState`` flags for control.
+      control: ``(nbatch, nstep, ncontrol)`` control trajectories, optional.
+      initial_warmstart: ``(nbatch, nv)`` qacc_warmstart, optional.
+      chunk_size: thread-pool chunk size, optional.
+      return_sensor: return final-step sensordata together with state.
+      post_step_forward_sensor: if returning sensors, run one ``mj_forward`` on
+        the final state before copying sensordata. This matches the previous
+        ``step`` followed by ``forward`` refresh behavior. When false, the
+        sensordata left by the final ``mj_step`` is returned directly.
+
+    Returns:
+      ``state`` array with shape ``(nbatch, nstate)``, or
+      ``(state, sensordata)`` when ``return_sensor`` is true.
+    """
+    if self._pool is None:
+      raise RuntimeError("step requested after pool close")
+    if nstep < 1:
+      raise ValueError("nstep must be >= 1")
+
+    initial_state = np.ascontiguousarray(initial_state, dtype=np.float64)
+    if initial_state.ndim != 2 or initial_state.shape[0] != self.nbatch:
+      raise ValueError(
+          f"initial_state must have shape (nbatch={self.nbatch}, nstate), "
+          f"got {initial_state.shape}"
+      )
+    if control is not None:
+      control = np.ascontiguousarray(control, dtype=np.float64)
+    if initial_warmstart is not None:
+      initial_warmstart = np.ascontiguousarray(
+          initial_warmstart, dtype=np.float64
+      )
+
+    return self._pool.step(
+        nstep=int(nstep),
+        control_spec=int(control_spec),
+        state0=initial_state,
+        warmstart0=initial_warmstart,
+        control=control,
+        chunk_size=chunk_size,
+        return_sensor=bool(return_sensor),
+        post_step_forward_sensor=bool(post_step_forward_sensor),
+    )
+
+  # -- forward --------------------------------------------------------
+  def forward(
+      self,
+      initial_state,
+      *,
+      initial_warmstart=None,
+      skipsensor: bool = False,
+      chunk_size: Optional[int] = None,
+  ):
+    """Run a single ``mj_forward`` on every environment.
+
+    Replaces the old ``mujoco.batch_forward`` module.
+
+    Args:
+      initial_state: ``(nbatch, nstate)`` full-physics states.
+      initial_warmstart: ``(nbatch, nv)`` qacc_warmstart, optional.
+      skipsensor: skip sensor evaluation.
+      chunk_size: thread-pool chunk size, optional.
+
+    Returns:
+      ``sensordata`` array with shape ``(nbatch, nsensordata)``.
+    """
+    if self._pool is None:
+      raise RuntimeError("forward requested after pool close")
+
+    initial_state = np.ascontiguousarray(initial_state, dtype=np.float64)
+    if initial_state.ndim != 2 or initial_state.shape[0] != self.nbatch:
+      raise ValueError(
+          f"initial_state must have shape (nbatch={self.nbatch}, nstate), "
+          f"got {initial_state.shape}"
+      )
+    if initial_warmstart is not None:
+      initial_warmstart = np.ascontiguousarray(
+          initial_warmstart, dtype=np.float64
+      )
+
+    return self._pool.forward(
+        state0=initial_state,
+        warmstart0=initial_warmstart,
+        skipsensor=bool(skipsensor),
+        chunk_size=chunk_size,
+    )
+
+  # -- batched site Jacobians ----------------------------------------
+  def compute_site_jacobians(
+      self,
+      initial_state,
+      site_ids,
+      *,
+      jacp: bool = True,
+      jacr: bool = False,
+      initial_warmstart=None,
+      chunk_size: Optional[int] = None,
+  ):
+    """Compute site Jacobians over the full env pool in parallel.
+
+    Per env this runs ``mj_kinematics + mj_comPos`` on the worker's mjData
+    (the minimum prefix required by ``mj_jacSite``), then emits jacp / jacr
+    for every requested site.
+
+    Args:
+      initial_state: ``(nbatch, nstate)`` full-physics states.
+      site_ids: scalar int or 1-D int sequence ``(K,)``. Same site set is
+        used for every env.
+      jacp: emit translation Jacobians ``(nbatch, K, 3, nv)``.
+      jacr: emit rotation Jacobians    ``(nbatch, K, 3, nv)``.
+      initial_warmstart: ``(nbatch, nv)`` qacc_warmstart, optional.
+      chunk_size: thread-pool chunk size, optional.
+
+    Returns:
+      A tuple ``(jacp, jacr)``. The unrequested entry is ``None``. When
+      ``site_ids`` is a Python scalar the K dimension is squeezed, returning
+      ``(nbatch, 3, nv)`` outputs.
+    """
+    if self._pool is None:
+      raise RuntimeError("compute_site_jacobians requested after pool close")
+    if not jacp and not jacr:
+      raise ValueError("at least one of jacp / jacr must be True")
+
+    initial_state = np.ascontiguousarray(initial_state, dtype=np.float64)
+    if initial_state.ndim != 2 or initial_state.shape[0] != self.nbatch:
+      raise ValueError(
+          f"initial_state must have shape (nbatch={self.nbatch}, nstate), "
+          f"got {initial_state.shape}"
+      )
+    if initial_warmstart is not None:
+      initial_warmstart = np.ascontiguousarray(
+          initial_warmstart, dtype=np.float64
+      )
+
+    site_ids_arr, scalar_index = _normalize_indices(site_ids)
+
+    jacp_arr, jacr_arr = self._pool.compute_site_jacobians(
+        state0=initial_state,
+        site_ids=site_ids_arr,
+        jacp=bool(jacp),
+        jacr=bool(jacr),
+        warmstart0=initial_warmstart,
+        chunk_size=chunk_size,
+    )
+    if scalar_index:
+      if jacp_arr is not None:
+        jacp_arr = jacp_arr[:, 0]
+      if jacr_arr is not None:
+        jacr_arr = jacr_arr[:, 0]
+    return jacp_arr, jacr_arr
+
+  # -- hfield height sampling ----------------------------------------
+  def sample_hfield_height(
+      self,
+      initial_state,
+      hfield_geom_id: int,
+      offsets,
+      frame_body_id: int,
+      *,
+      alignment: str = "yaw",
+      output: str = "height",
+      chunk_size: Optional[int] = None,
+  ) -> np.ndarray:
+    """Sample a MuJoCo hfield geom with bilinear interpolation.
+
+    This is a hfield-only sensor primitive. Per environment it sets
+    ``initial_state`` on the pool-owned model/data, runs the kinematic prefix
+    needed for body and geom poses, attaches ``offsets`` to ``frame_body_id``,
+    and samples the target hfield in geom-local coordinates. Samples outside
+    the hfield domain are clamped to the border.
+
+    Args:
+      initial_state: ``(nbatch, nstate)`` full-physics states.
+      hfield_geom_id: integer geom id; the geom must be type ``hfield`` in
+        every pool-owned model.
+      offsets: ``(npoint, 2)`` local XY sample pattern.
+      frame_body_id: body id used as the attachment frame.
+      alignment: ``"yaw"`` (default), ``"world"``/``"none"``, or
+        ``"body"``/``"full"``.
+      output: ``"height"``/``"terrain_height"`` for sampled world z, or
+        ``"clearance"`` for ``frame_z - sampled_world_z``.
+      chunk_size: thread-pool chunk size, optional.
+
+    Returns:
+      ``(nbatch, npoint)`` float64 array.
+    """
+    if self._pool is None:
+      raise RuntimeError("sample_hfield_height requested after pool close")
+
+    initial_state = np.ascontiguousarray(initial_state, dtype=np.float64)
+    if initial_state.shape != (self.nbatch, self.nstate):
+      raise ValueError(
+          f"initial_state must have shape (nbatch={self.nbatch}, "
+          f"nstate={self.nstate}), got {initial_state.shape}"
+      )
+
+    offsets = np.ascontiguousarray(offsets, dtype=np.float64)
+    if offsets.ndim != 2 or offsets.shape[1] != 2:
+      raise ValueError(f"offsets must have shape (npoint, 2), got {offsets.shape}")
+    if offsets.shape[0] == 0:
+      raise ValueError("offsets must be non-empty")
+
+    hfield_geom_id = _normalize_scalar_int("hfield_geom_id", hfield_geom_id)
+    frame_body_id = _normalize_scalar_int("frame_body_id", frame_body_id)
+    if chunk_size is not None and chunk_size <= 0:
+      raise ValueError("chunk_size must be positive")
+    alignment = str(alignment).lower()
+    output = str(output).lower()
+
+    return self._pool.sample_hfield_height(
+        state0=initial_state,
+        hfield_geom_id=hfield_geom_id,
+        offsets=offsets,
+        frame_body_id=frame_body_id,
+        alignment=alignment,
+        output=output,
+        chunk_size=chunk_size,
+    )
+
+  # -- batched multi-ray --------------------------------------------
+  def multi_ray(
+      self,
+      initial_state,
+      pnt,
+      vec,
+      *,
+      geomgroup=None,
+      flg_static: int = 1,
+      bodyexclude: int | Sequence[int] = -1,
+      return_normal: bool = False,
+      cutoff: float = float(mujoco.mjMAXVAL),
+      chunk_size: Optional[int] = None,
+  ):
+    """Run ``mj_multiRay`` over the full env pool in parallel.
+
+    Per environment this sets ``initial_state`` on the pool-owned model/data,
+    runs the minimum position-stage prefix required by MuJoCo ray casting, and
+    then calls ``mj_multiRay`` once for that environment.
+
+    Args:
+      initial_state: ``(nbatch, nstate)`` full-physics states.
+      pnt: ray origins, shape ``(3,)`` shared across envs or
+        ``(nbatch, 3)`` per environment.
+      vec: ray directions, shape ``(nray, 3)`` shared across envs or
+        ``(nbatch, nray, 3)`` per environment.
+      geomgroup: optional geom visibility mask with shape ``(mjNGROUP,)``.
+      flg_static: forwarded to ``mj_multiRay``.
+      bodyexclude: scalar body id shared across envs or ``(nbatch,)``.
+      return_normal: whether to return surface normals.
+      cutoff: forwarded to ``mj_multiRay``.
+      chunk_size: thread-pool chunk size, optional.
+
+    Returns:
+      ``(dist, geomid, normal)`` where ``dist`` and ``geomid`` have shape
+      ``(nbatch, nray)`` and ``normal`` is either ``None`` or
+      ``(nbatch, nray, 3)``.
+    """
+    if self._pool is None:
+      raise RuntimeError("multi_ray requested after pool close")
+
+    initial_state = np.ascontiguousarray(initial_state, dtype=np.float64)
+    if initial_state.shape != (self.nbatch, self.nstate):
+      raise ValueError(
+          f"initial_state must have shape (nbatch={self.nbatch}, "
+          f"nstate={self.nstate}), got {initial_state.shape}"
+      )
+
+    pnt = np.ascontiguousarray(pnt, dtype=np.float64)
+    if pnt.shape != (3,) and pnt.shape != (self.nbatch, 3):
+      raise ValueError(
+          f"pnt must have shape (3,) or (nbatch={self.nbatch}, 3), "
+          f"got {pnt.shape}"
+      )
+
+    vec = np.ascontiguousarray(vec, dtype=np.float64)
+    if vec.ndim == 2:
+      if vec.shape[1] != 3:
+        raise ValueError(f"vec must have shape (nray, 3), got {vec.shape}")
+    elif vec.ndim == 3:
+      if vec.shape[0] != self.nbatch or vec.shape[2] != 3:
+        raise ValueError(
+            f"vec must have shape (nray, 3) or (nbatch={self.nbatch}, nray, 3), "
+            f"got {vec.shape}"
+        )
+    else:
+      raise ValueError(
+          f"vec must have shape (nray, 3) or (nbatch={self.nbatch}, nray, 3), "
+          f"got {vec.shape}"
+      )
+    if vec.shape[-2] == 0:
+      raise ValueError("vec must contain at least one ray")
+
+    if geomgroup is not None:
+      geomgroup = np.ascontiguousarray(geomgroup, dtype=np.uint8)
+      if geomgroup.shape != (mujoco.mjNGROUP,):
+        raise ValueError(
+            f"geomgroup must have shape ({mujoco.mjNGROUP},), got {geomgroup.shape}"
+        )
+
+    if isinstance(bodyexclude, (bool, np.bool_)):
+      raise TypeError("bodyexclude must be an integer id or a 1-D integer array")
+    if isinstance(bodyexclude, numbers.Integral):
+      bodyexclude = np.asarray([int(bodyexclude)], dtype=np.int32)
+    else:
+      arr = np.asarray(bodyexclude)
+      if arr.dtype.kind not in ("i", "u"):
+        raise TypeError("bodyexclude must contain integers")
+      bodyexclude = np.ascontiguousarray(arr, dtype=np.int32)
+      if bodyexclude.ndim != 1:
+        raise ValueError(f"bodyexclude must be 1-D, got {bodyexclude.shape}")
+      if bodyexclude.shape[0] not in (1, self.nbatch):
+        raise ValueError(
+            f"bodyexclude must have shape (1,) or (nbatch={self.nbatch},), "
+            f"got {bodyexclude.shape}"
+        )
+
+    if chunk_size is not None and chunk_size <= 0:
+      raise ValueError("chunk_size must be positive")
+
+    return self._pool.multi_ray(
+        state0=initial_state,
+        pnt=pnt,
+        vec=vec,
+        geomgroup=geomgroup,
+        flg_static=int(flg_static),
+        bodyexclude=bodyexclude,
+        return_normal=bool(return_normal),
+        cutoff=float(cutoff),
+        chunk_size=chunk_size,
+    )
+
+  # -- sparse reset ---------------------------------------------------
+  def reset(
+      self,
+      env_ids: Sequence[int],
+      initial_state,
+      *,
+      randomization: Optional[Dict[str, Any]] = None,
+      initial_warmstart=None,
+      skipsensor: bool = False,
+      chunk_size: Optional[int] = None,
+  ):
+    """Reset a subset of environments, optionally applying field patches.
+
+    Args:
+      env_ids: 1-D array of environment indices to reset.
+      initial_state: ``(len(env_ids), nstate)`` full-physics states.
+      randomization: optional ``Dict[str, ndarray]`` mapping field name
+        to a payload with leading dim ``len(env_ids)``.
+      initial_warmstart: optional ``(len(env_ids), nv)``.
+      skipsensor: skip sensor evaluation.
+      chunk_size: thread-pool chunk size, optional.
+
+    Returns:
+      ``(state, sensordata)`` with leading dim ``len(env_ids)``.
+    """
+    if self._pool is None:
+      raise RuntimeError("reset requested after pool close")
+
+    env_ids_arr = np.ascontiguousarray(env_ids, dtype=np.int32)
+    if env_ids_arr.ndim != 1:
+      raise ValueError("env_ids must be 1-D")
+    n = int(env_ids_arr.shape[0])
+
+    initial_state = np.ascontiguousarray(initial_state, dtype=np.float64)
+    if initial_state.shape != (n, self.nstate):
+      raise ValueError(
+          f"initial_state must have shape ({n}, nstate={self.nstate}), "
+          f"got {initial_state.shape}"
+      )
+    if initial_warmstart is not None:
+      initial_warmstart = np.ascontiguousarray(
+          initial_warmstart, dtype=np.float64
+      )
+
+    if randomization is not None:
+      unknown = [k for k in randomization if k not in SUPPORTED_FIELDS]
+      if unknown:
+        raise ValueError(
+            f"Unknown randomization field(s) {unknown}. "
+            f"Supported: {SUPPORTED_FIELDS}"
+        )
+      for key, val in randomization.items():
+        arr = np.ascontiguousarray(val, dtype=np.float64)
+        if arr.shape[0] != n:
+          raise ValueError(
+              f"randomization['{key}'] leading dim must be len(env_ids)={n}, "
+              f"got {arr.shape[0]}"
+          )
+        randomization[key] = arr
+
+    return self._pool.reset(
+        env_ids=env_ids_arr,
+        initial_state=initial_state,
+        randomization=randomization,
+        initial_warmstart=initial_warmstart,
+        skipsensor=bool(skipsensor),
+        chunk_size=chunk_size,
+    )
+
+  # -- introspection for tests ---------------------------------------
+  def get_field(self, env_id: int, name: str) -> np.ndarray:
+    """Return a flat copy of the given field for one environment."""
+    if self._pool is None:
+      raise RuntimeError("get_field requested after pool close")
+    return self._pool.get_field(int(env_id), str(name))
+
+  def get_field_indexed(
+      self, env_id: int, name: str, indices: int | Sequence[int]
+  ):
+    """Return selected entries from one field for one environment.
+
+    Scalar fields return a scalar for single-index access and ``(k,)`` for
+    multi-index access. Multi-component fields return ``(width,)`` for
+    single-index access and ``(k, width)`` for multi-index access.
+    """
+    if self._pool is None:
+      raise RuntimeError("get_field_indexed requested after pool close")
+    name = str(name)
+    if name not in SUPPORTED_FIELDS:
+      raise ValueError(f"Unknown field '{name}'. Supported: {SUPPORTED_FIELDS}")
+    indices_arr, scalar_index = _normalize_indices(indices)
+    out = self._pool.get_field_indexed(int(env_id), name, indices_arr)
+    if not scalar_index:
+      return out
+    if _FIELD_COMPONENT_WIDTHS[name] == 1:
+      return out[0].item()
+    return out[0]
+
+  def set_field_indexed(
+      self,
+      env_id: int,
+      name: str,
+      indices: int | Sequence[int],
+      value,
+  ) -> None:
+    """Set selected entries from one field for one environment."""
+    if self._pool is None:
+      raise RuntimeError("set_field_indexed requested after pool close")
+    name = str(name)
+    if name not in SUPPORTED_FIELDS:
+      raise ValueError(f"Unknown field '{name}'. Supported: {SUPPORTED_FIELDS}")
+    indices_arr, scalar_index = _normalize_indices(indices)
+    value_arr = _normalize_indexed_value(
+        name, scalar_index, int(indices_arr.shape[0]), value
+    )
+    self._pool.set_field_indexed(
+        int(env_id), name, indices_arr, value_arr
+    )

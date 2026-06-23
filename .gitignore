@@ -1,0 +1,12 @@
+.DS_Store
+.pytest_cache/
+.ruff_cache/
+.venv/
+__pycache__/
+*.egg-info/
+*.py[cod]
+
+# Local native build output for editable installs.
+src/mujoco_uni/compiled/_batch_env*.so
+build/
+dist/
