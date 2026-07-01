@@ -51,7 +51,7 @@ class ThreadPool {
   void ResetCount() { ctr_ = 0; }
 
   // wait for count, then return
-  void WaitCount(int value) {
+  void WaitCount(std::uint64_t value) {
     std::unique_lock<std::mutex> lock(m_);
     cv_ext_.wait(lock, [&]() { return this->GetCount() >= value; });
   }

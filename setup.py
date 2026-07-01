@@ -25,6 +25,7 @@ class BuildExt(build_ext):
                     pybind11.get_include(),
                     numpy.get_include(),
                     str(mujoco_dir / "include"),
+                    str(Path(__file__).resolve().parent / "src" / "mujoco_uni" / "native"),
                 ]
             )
             ext.extra_objects.append(str(libmujoco))
@@ -46,8 +47,8 @@ setup(
         Extension(
             "mujoco_uni.compiled._batch_env",
             sources=[
-                "src/mujoco_uni/compiled/batch_env.cc",
-                "src/mujoco_uni/compiled/threadpool.cc",
+                "src/mujoco_uni/native/batch_env.cc",
+                "src/mujoco_uni/native/threadpool.cc",
             ],
             language="c++",
         )

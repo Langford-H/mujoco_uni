@@ -4,13 +4,71 @@ MuJoCoUni is the standalone UniLab batch-executor layer for official MuJoCo.
 It provides the `BatchEnvPool` API used by UniLab without modifying MuJoCo
 solver, contact, integrator, or source-tree internals.
 
-This repository is intentionally small:
+## System Boundary
 
-- MuJoCo remains the solver dependency.
-- MuJoCoUni owns batching, model cloning, per-thread `mjData`, and Python API
-  validation.
-- UniLab owns tasks, rollout logic, domain randomization payloads, and training.
-- Distributed orchestration, if needed, lives above MuJoCoUni.
+MuJoCoUni sits between UniLab and official MuJoCo.
+
+```text
+MJCF / XML asset
+        |
+        v
+official MuJoCo compiler
+        |
+        v
+mjModel
+        |
+        v
+MuJoCoUni BatchEnvPool
+  - captures/copies mjModel
+  - owns model pool
+  - owns worker mjData
+  - calls official MuJoCo C APIs
+        ^
+        |
+UniLab backend
+  - receives task/training command
+  - owns rollout pace
+  - packs state/control/reset arrays
+  - unpacks state/sensor arrays
+```
+
+Responsibility split:
+
+```text
+UniLab:
+  task config, commands, rewards, rollout pace, CPU/GPU bridge,
+  training orchestration, logging
+
+MuJoCoUni:
+  BatchEnvPool, model cloning, worker mjData, local thread pool,
+  batched step/forward/reset/query execution
+
+MuJoCo:
+  MJCF compiler, mjModel/mjData definitions, solver, contact,
+  integrator, sensor layout, official C API
+```
+
+For larger CPU/GPU training, UniLab remains the bridge above local MuJoCoUni
+executors:
+
+```text
+CPU rollout side
+  MuJoCoUni BatchEnvPool instances
+  produce observation/reward/done/sensor data
+  request action tensors
+        |
+        v
+UniLab bridge
+  batches rollout traffic
+  routes data toward GPU learner/action service
+  routes actions/control commands back to CPU workers
+        |
+        v
+GPU side
+  consumes training data
+  performs learner/inference work
+  returns action tensors or policy-side feedback through UniLab
+```
 
 ## Version Policy
 
@@ -37,10 +95,14 @@ MuJoCoUni fails fast if the loaded official `mujoco` package does not match the
 solver version targeted by this release, or if the required MuJoCo Python model
 pointer helpers are unavailable.
 
+## Roadmap
+
+Further development is tracked in [ROADMAP.md](ROADMAP.md).
+
 ## Package Layout
 
-The structure mirrors the DrakeUni split between runtime code and compiled
-executor code:
+The structure mirrors the DrakeUni split between runtime code, native source,
+and compiled artifacts:
 
 ```text
 src/mujoco_uni/
@@ -50,12 +112,14 @@ src/mujoco_uni/
   runtime/
     batch.py                # Python API, validation, compatibility behavior
   compiled/
+    __init__.py             # Native extension loader and diagnostics
+    _batch_env*.so          # Generated extension after local build
+  native/
     batch_env.cc            # Native pybind11 executor
     threadpool.h/.cc        # Local thread pool
-    _batch_env*.so          # Generated extension after local build
 ```
 
-Application code should normally import:
+The stable import path is:
 
 ```python
 from mujoco_uni.batch_env import BatchEnvPool, SUPPORTED_FIELDS
@@ -70,14 +134,15 @@ pool-owned models internally.
 
 The hot path is native C++ calling the official MuJoCo C API. The pool uses:
 
-- one pool-owned `mjModel` per environment row,
+- one logical pool-owned `mjModel` assignment per environment slot,
 - one reusable `mjData` per worker thread,
 - disjoint environment chunks,
-- disjoint output rows,
+- disjoint output slots,
 - one synchronization point per batch operation.
 
-There is no MPI or OpenMP inside MuJoCoUni. Large-scale multi-process,
-multi-socket, or multi-node collection should be coordinated by the caller.
+There is no MPI or OpenMP inside the base `BatchEnvPool` executor. Large-scale
+multi-process, multi-socket, or multi-node collection composes multiple local
+executors from a layer above `BatchEnvPool`.
 
 ## Public API
 
@@ -139,8 +204,7 @@ mujoco = ["mujoco-uni==0.1.0"]
 mujoco-uni = { path = "../mujoco_uni", editable = true }
 ```
 
-Then UniLab should import through its compatibility/backend layer, which in turn
-imports:
+UniLab imports through its compatibility/backend layer, which in turn imports:
 
 ```python
 from mujoco_uni.batch_env import BatchEnvPool, SUPPORTED_FIELDS
@@ -165,14 +229,14 @@ uv pip install --force-reinstall --no-deps --no-build-isolation -e .
 
 ## Validation
 
-Run the standalone checks:
+Standalone checks:
 
 ```bash
 uv run ruff check .
 uv run pytest -q
 ```
 
-Recommended UniLab integration checks:
+UniLab integration checks:
 
 ```bash
 cd ../UniLab
@@ -185,7 +249,7 @@ uv run pytest \
   -q
 ```
 
-Recommended training smoke:
+Training smoke:
 
 ```bash
 cd ../UniLab
@@ -199,10 +263,10 @@ uv run python scripts/train_rsl_rl.py \
   training.no_play=true \
   training.logger=tensorboard \
   training.device=cpu \
-  training.log_root=/tmp/unilab_mujoco_uni_smoke
+  training.log_root=logs/mujoco_uni_smoke
 ```
 
-## Thread-Safety Notes
+## Thread Safety
 
 Built-in MuJoCo sensors are read from `mjData.sensordata` and are supported by
 the batch executor.
@@ -211,15 +275,15 @@ Custom sensors, plugins, and global MuJoCo callbacks are thread-safety-sensitive
 If `nthread > 1`, any global mutable callback/plugin state is the caller's
 responsibility.
 
-## Non-Goals
+## Scope Boundaries
 
-MuJoCoUni does not:
+MuJoCoUni stays outside these responsibilities:
 
-- alter MuJoCo source code,
-- fork MuJoCo solver logic,
-- split a single MuJoCo solve across MPI ranks,
-- add OpenMP to MuJoCo,
-- own UniLab task YAMLs, rollout code, reward functions, or DrakeUni behavior.
+- MuJoCo source-code changes,
+- MuJoCo solver/contact/integrator forks,
+- distributed factorization of one MuJoCo solve across MPI ranks,
+- OpenMP inside the MuJoCoUni executor,
+- UniLab task YAMLs, rollout code, reward functions, and DrakeUni behavior.
 
 ## License
 

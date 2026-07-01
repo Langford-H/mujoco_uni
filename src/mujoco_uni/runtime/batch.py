@@ -103,6 +103,11 @@ def _normalize_scalar_int(name: str, value) -> int:
   return int(value)
 
 
+def _validate_chunk_size(chunk_size: Optional[int]) -> None:
+  if chunk_size is not None and chunk_size <= 0:
+    raise ValueError("chunk_size must be positive")
+
+
 def _normalize_indexed_value(name: str, scalar_index: bool, nindex: int, value):
   width = _FIELD_COMPONENT_WIDTHS[name]
   arr = np.asarray(value, dtype=np.float64)
@@ -258,6 +263,7 @@ class BatchEnvPool:
       initial_warmstart = np.ascontiguousarray(
           initial_warmstart, dtype=np.float64
       )
+    _validate_chunk_size(chunk_size)
 
     return self._pool.step(
         nstep=int(nstep),
@@ -305,6 +311,7 @@ class BatchEnvPool:
       initial_warmstart = np.ascontiguousarray(
           initial_warmstart, dtype=np.float64
       )
+    _validate_chunk_size(chunk_size)
 
     return self._pool.forward(
         state0=initial_state,
@@ -359,6 +366,7 @@ class BatchEnvPool:
       initial_warmstart = np.ascontiguousarray(
           initial_warmstart, dtype=np.float64
       )
+    _validate_chunk_size(chunk_size)
 
     site_ids_arr, scalar_index = _normalize_indices(site_ids)
 
@@ -430,8 +438,7 @@ class BatchEnvPool:
 
     hfield_geom_id = _normalize_scalar_int("hfield_geom_id", hfield_geom_id)
     frame_body_id = _normalize_scalar_int("frame_body_id", frame_body_id)
-    if chunk_size is not None and chunk_size <= 0:
-      raise ValueError("chunk_size must be positive")
+    _validate_chunk_size(chunk_size)
     alignment = str(alignment).lower()
     output = str(output).lower()
 
@@ -542,8 +549,7 @@ class BatchEnvPool:
             f"got {bodyexclude.shape}"
         )
 
-    if chunk_size is not None and chunk_size <= 0:
-      raise ValueError("chunk_size must be positive")
+    _validate_chunk_size(chunk_size)
 
     return self._pool.multi_ray(
         state0=initial_state,
@@ -600,6 +606,7 @@ class BatchEnvPool:
       initial_warmstart = np.ascontiguousarray(
           initial_warmstart, dtype=np.float64
       )
+    _validate_chunk_size(chunk_size)
 
     if randomization is not None:
       unknown = [k for k in randomization if k not in SUPPORTED_FIELDS]

@@ -14,7 +14,7 @@ version = "0.1.0"
 description = "Standalone MuJoCoUni batched executor layer"
 readme = "README.md"
 requires-python = ">=3.10,<3.14"
-license = { text = "Apache-2.0" }
+license = "Apache-2.0"
 dependencies = [
     "mujoco==3.8.0",
     "numpy",
@@ -22,7 +22,10 @@ dependencies = [
 
 [tool.setuptools]
 package-dir = { "" = "src" }
-packages = ["mujoco_uni", "mujoco_uni.compiled", "mujoco_uni.runtime"]
+packages = ["mujoco_uni", "mujoco_uni.compiled", "mujoco_uni.native", "mujoco_uni.runtime"]
+
+[tool.setuptools.package-data]
+mujoco_uni = ["native/*.cc", "native/*.h"]
 
 [dependency-groups]
 dev = ["pytest", "ruff"]

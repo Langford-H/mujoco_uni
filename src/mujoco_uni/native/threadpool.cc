@@ -14,6 +14,7 @@
 
 #include "threadpool.h"
 
+#include <cstddef>
 #include <condition_variable>
 #include <functional>
 #include <mutex>
@@ -35,7 +36,7 @@ ThreadPool::ThreadPool(int num_threads) : ctr_(0) {
 ThreadPool::~ThreadPool() {
   {
     std::unique_lock<std::mutex> lock(m_);
-    for (int i = 0; i < threads_.size(); i++) {
+    for (std::size_t i = 0; i < threads_.size(); i++) {
       queue_.push(nullptr);
     }
     cv_in_.notify_all();
