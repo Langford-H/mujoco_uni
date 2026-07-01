@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 import subprocess
 import sys
 from typing import Any
@@ -62,12 +61,6 @@ HFIELD_XML = """
 
 def _model(xml: str = PENDULUM_XML) -> mujoco.MjModel:
   return mj.MjModel.from_xml_string(xml)
-
-
-def _mujoco_version_tuple() -> tuple[int, int, int]:
-  match = re.match(r"^(\d+)\.(\d+)\.(\d+)", mujoco.__version__)
-  assert match is not None
-  return tuple(int(match.group(i)) for i in range(1, 4))
 
 
 def _state_from_qpos_qvel(
@@ -142,7 +135,7 @@ def _serial_forward(model: mujoco.MjModel, states: np.ndarray) -> np.ndarray:
 def test_unsupported_mujoco_version_fails_before_batch_runtime_import() -> None:
   code = """
 import mujoco
-mujoco.__version__ = "3.3.7"
+mujoco.__version__ = "3.7.0"
 try:
     from mujoco_uni.batch_env import BatchEnvPool
 except ImportError as exc:
@@ -157,7 +150,7 @@ raise SystemExit("expected ImportError")
       text=True,
   )
   assert result.returncode == 0, result.stdout + result.stderr
-  assert "supports official mujoco>=3.4,<3.11" in result.stdout
+  assert "supports official mujoco>=3.8,<3.11" in result.stdout
 
 
 def test_mujoco_build_runtime_mismatch_fails_fast() -> None:
@@ -344,63 +337,41 @@ def test_multi_ray_matches_serial_reference() -> None:
   pnt = np.asarray([0.0, 0.0, 1.0])
   vec = np.asarray([[0.0, 0.0, -1.0], [0.25, 0.0, -1.0]], dtype=np.float64)
   nray = vec.shape[0]
-  supports_normals = _mujoco_version_tuple() >= (3, 5, 0)
 
   expected_geomid = np.zeros((2, nray), dtype=np.int32)
   expected_dist = np.zeros((2, nray), dtype=np.float64)
-  expected_normal = (
-      np.zeros((2, nray, 3), dtype=np.float64) if supports_normals else None
-  )
+  expected_normal = np.zeros((2, nray, 3), dtype=np.float64)
   vec_flat = vec.reshape(-1)
   for i, state in enumerate(states):
     data = mj.MjData(model)
     mj.mj_setState(model, data, state, int(mj.mjtState.mjSTATE_FULLPHYSICS))
     mj.mj_kinematics(model, data)
     mj.mj_comPos(model, data)
-    if supports_normals:
-      normal_flat = np.zeros(nray * 3, dtype=np.float64)
-      mj.mj_multiRay(
-          model,
-          data,
-          pnt,
-          vec_flat,
-          None,
-          1,
-          -1,
-          expected_geomid[i],
-          expected_dist[i],
-          normal_flat,
-          nray,
-          float(mj.mjMAXVAL),
-      )
-      assert expected_normal is not None
-      expected_normal[i] = normal_flat.reshape(nray, 3)
-    else:
-      mj.mj_multiRay(
-          model,
-          data,
-          pnt,
-          vec_flat,
-          None,
-          1,
-          -1,
-          expected_geomid[i],
-          expected_dist[i],
-          nray,
-          float(mj.mjMAXVAL),
-      )
+    normal_flat = np.zeros(nray * 3, dtype=np.float64)
+    mj.mj_multiRay(
+        model,
+        data,
+        pnt,
+        vec_flat,
+        None,
+        1,
+        -1,
+        expected_geomid[i],
+        expected_dist[i],
+        normal_flat,
+        nray,
+        float(mj.mjMAXVAL),
+    )
+    expected_normal[i] = normal_flat.reshape(nray, 3)
 
   with BatchEnvPool(model, nbatch=2, nthread=2) as pool:
     got_dist, got_geomid, got_normal = pool.multi_ray(
-        states, pnt, vec, return_normal=supports_normals, chunk_size=1
+        states, pnt, vec, return_normal=True, chunk_size=1
     )
 
   np.testing.assert_array_equal(got_geomid, expected_geomid)
   np.testing.assert_allclose(got_dist, expected_dist, atol=1e-12, rtol=0)
-  if supports_normals:
-    np.testing.assert_allclose(got_normal, expected_normal, atol=1e-12, rtol=0)
-  else:
-    assert got_normal is None
+  np.testing.assert_allclose(got_normal, expected_normal, atol=1e-12, rtol=0)
 
 
 def test_hfield_height_sampling_flat_terrain() -> None:

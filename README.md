@@ -78,7 +78,7 @@ Current release:
 
 ```text
 mujoco-uni==0.2.0
-mujoco>=3.4,<3.11
+mujoco>=3.8,<3.11
 ```
 
 The public metadata is available from Python:
@@ -99,8 +99,8 @@ build target.
 Version switching is environment-level:
 
 ```text
-env-mj34  -> mujoco==3.4.x  -> build/install mujoco-uni
 env-mj38  -> mujoco==3.8.x  -> build/install mujoco-uni
+env-mj39  -> mujoco==3.9.x  -> build/install mujoco-uni
 env-mj310 -> mujoco==3.10.x -> build/install mujoco-uni
 ```
 
@@ -264,7 +264,7 @@ uv run python tools/version_matrix.py --pytest
 The default matrix covers:
 
 ```text
-3.4.0 3.5.0 3.6.0 3.7.0 3.8.0 3.8.1 3.9.0 3.10.0
+3.8.0 3.8.1 3.9.0 3.10.0
 ```
 
 Full UniLab task validation is separate from the quick package matrix:
