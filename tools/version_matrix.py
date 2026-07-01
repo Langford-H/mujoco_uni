@@ -10,7 +10,8 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_VERSIONS = ("3.8.0", "3.10.0")
+UNILAB_ROOT = ROOT.parent / "UniLab"
+DEFAULT_VERSIONS = ("3.4.0", "3.5.0", "3.6.0", "3.7.0", "3.8.0", "3.8.1", "3.9.0", "3.10.0")
 
 
 def _python_path(env_dir: Path) -> Path:
@@ -63,7 +64,7 @@ from mujoco_uni.compiled import MUJOCO_BUILD_VERSION
 
 assert mj.__version__ == {expected_version!r}, mj.__version__
 assert MUJOCO_BUILD_VERSION == {expected_version!r}, MUJOCO_BUILD_VERSION
-assert mujoco_uni.MUJOCO_VERSION_SPEC == ">=3.8,<3.11"
+assert mujoco_uni.MUJOCO_VERSION_SPEC == ">=3.4,<3.11"
 
 model = mj.MjModel.from_xml_string(\"\"\"
 <mujoco>
@@ -111,7 +112,80 @@ print("ok mujoco", {expected_version!r}, "build", MUJOCO_BUILD_VERSION)
 """
 
 
-def run_version(version: str, *, keep_envs: bool, run_pytest: bool) -> None:
+def _run_unilab_checks(version: str, python: Path, source: Path, *, train: bool) -> None:
+    if not UNILAB_ROOT.exists():
+        raise RuntimeError(f"UniLab checkout not found at {UNILAB_ROOT}")
+
+    del source
+    _run(
+        [
+            "uv",
+            "pip",
+            "install",
+            "--python",
+            str(python),
+            "-e",
+            str(UNILAB_ROOT),
+        ]
+    )
+    _run(
+        [
+            str(python),
+            "-c",
+            (
+                "import mujoco, mujoco_uni; "
+                "from mujoco_uni.compiled import MUJOCO_BUILD_VERSION; "
+                f"assert mujoco.__version__ == {version!r}, mujoco.__version__; "
+                f"assert MUJOCO_BUILD_VERSION == {version!r}, MUJOCO_BUILD_VERSION; "
+                "print('ok unilab env', mujoco.__version__, MUJOCO_BUILD_VERSION)"
+            ),
+        ]
+    )
+    # The standalone package tests own the MuJoCoUni version/import contract.
+    # The UniLab pass below stays focused on backend behavior and task launch.
+    _run(
+        [
+            str(python),
+            "-m",
+            "pytest",
+            "-q",
+            "tests/base/test_mujoco_batch_env_randomization.py",
+            "tests/base/test_mujoco_batch_env_jacobian.py",
+            "tests/base/backend/test_mujoco_site_jacobian.py",
+            "tests/envs/locomotion/test_go2_rough_height_scan.py",
+            "tests/envs/locomotion/test_go2_footstand.py",
+            "tests/envs/locomotion/test_go2_terrain_spawn.py",
+        ],
+        cwd=UNILAB_ROOT,
+    )
+    if train:
+        _run(
+            [
+                str(python),
+                "scripts/train_rsl_rl.py",
+                "task=go2_joystick_flat/mujoco",
+                "algo.seed=1",
+                "algo.num_envs=128",
+                "algo.num_steps_per_env=24",
+                "algo.max_iterations=1",
+                "algo.save_interval=100",
+                "training.no_play=true",
+                "training.logger=tensorboard",
+                "training.device=cpu",
+                f"training.log_root=logs/mujoco_uni_version_matrix/mj{version}",
+            ],
+            cwd=UNILAB_ROOT,
+        )
+
+
+def run_version(
+    version: str,
+    *,
+    keep_envs: bool,
+    run_pytest: bool,
+    run_unilab: bool,
+    run_unilab_train: bool,
+) -> None:
     tmp = Path(tempfile.mkdtemp(prefix=f"mujoco_uni_mj{version.replace('.', '')}_"))
     try:
         source = _copy_source(tmp)
@@ -159,6 +233,8 @@ def run_version(version: str, *, keep_envs: bool, run_pytest: bool) -> None:
                 ],
                 cwd=source,
             )
+        if run_unilab or run_unilab_train:
+            _run_unilab_checks(version, python, source, train=run_unilab_train)
     finally:
         if keep_envs:
             print(f"kept {tmp}")
@@ -171,11 +247,27 @@ def main() -> None:
     parser.add_argument("--versions", nargs="+", default=list(DEFAULT_VERSIONS))
     parser.add_argument("--keep-envs", action="store_true")
     parser.add_argument("--pytest", action="store_true", help="Run the Python test suite per version.")
+    parser.add_argument(
+        "--unilab",
+        action="store_true",
+        help="Run focused UniLab MuJoCo integration tests per version.",
+    )
+    parser.add_argument(
+        "--unilab-train",
+        action="store_true",
+        help="Run a one-iteration UniLab training smoke per version.",
+    )
     args = parser.parse_args()
 
     for version in args.versions:
         print(f"\n== MuJoCo {version} ==", flush=True)
-        run_version(version, keep_envs=bool(args.keep_envs), run_pytest=bool(args.pytest))
+        run_version(
+            version,
+            keep_envs=bool(args.keep_envs),
+            run_pytest=bool(args.pytest),
+            run_unilab=bool(args.unilab),
+            run_unilab_train=bool(args.unilab_train),
+        )
 
 
 if __name__ == "__main__":

@@ -19,10 +19,10 @@ def test_package_version_is_independent_from_solver_version() -> None:
     assert importlib.metadata.version("mujoco-uni") == mujoco_uni.__version__
     assert mujoco_uni.__version__ == "0.2.0"
     assert mujoco_uni.MUJOCO_DEFAULT_VERSION == "3.8.0"
-    assert mujoco_uni.MUJOCO_MIN_VERSION == "3.8.0"
+    assert mujoco_uni.MUJOCO_MIN_VERSION == "3.4.0"
     assert mujoco_uni.MUJOCO_MAX_VERSION_EXCLUSIVE == "3.11.0"
-    assert mujoco_uni.MUJOCO_VERSION_SPEC == ">=3.8,<3.11"
-    assert (3, 8, 0) <= _version_tuple(mujoco.__version__) < (3, 11, 0)
+    assert mujoco_uni.MUJOCO_VERSION_SPEC == ">=3.4,<3.11"
+    assert (3, 4, 0) <= _version_tuple(mujoco.__version__) < (3, 11, 0)
 
 
 def test_batch_env_constructs_from_official_mujoco_model() -> None:

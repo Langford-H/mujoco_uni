@@ -47,6 +47,15 @@
 #define MUJOCO_UNI_BUILD_MUJOCO_VERSION "unknown"
 #endif
 
+#ifndef mjVERSION_HEADER
+#define mjVERSION_HEADER 0
+#endif
+
+#define MUJOCO_UNI_HAS_FLEX_SPARSITY_COUNTS (mjVERSION_HEADER >= 3005000)
+#define MUJOCO_UNI_HAS_TENDON_SPARSITY_COUNT (mjVERSION_HEADER >= 3006000)
+#define MUJOCO_UNI_HAS_HISTORY_COUNT (mjVERSION_HEADER >= 3005000)
+#define MUJOCO_UNI_HAS_MULTIRAY_NORMAL (mjVERSION_HEADER >= 3005000)
+
 namespace mujoco::python {
 
 namespace {
@@ -351,17 +360,23 @@ bool SameModelDataLayout(const raw::MjModel* lhs, const raw::MjModel* rhs) {
   MJ_MODEL_FIELD_EQ(nflexvert);
   MJ_MODEL_FIELD_EQ(nflexedge);
   MJ_MODEL_FIELD_EQ(nflexelem);
+#if MUJOCO_UNI_HAS_FLEX_SPARSITY_COUNTS
   MJ_MODEL_FIELD_EQ(nJfe);
   MJ_MODEL_FIELD_EQ(nJfv);
+#endif
   MJ_MODEL_FIELD_EQ(neq);
   MJ_MODEL_FIELD_EQ(ntendon);
+#if MUJOCO_UNI_HAS_TENDON_SPARSITY_COUNT
   MJ_MODEL_FIELD_EQ(nJten);
+#endif
   MJ_MODEL_FIELD_EQ(nwrap);
   MJ_MODEL_FIELD_EQ(nsensordata);
   MJ_MODEL_FIELD_EQ(nmocap);
   MJ_MODEL_FIELD_EQ(nplugin);
   MJ_MODEL_FIELD_EQ(ntree);
+#if MUJOCO_UNI_HAS_HISTORY_COUNT
   MJ_MODEL_FIELD_EQ(nhistory);
+#endif
   MJ_MODEL_FIELD_EQ(nJmom);
   MJ_MODEL_FIELD_EQ(nuserdata);
   MJ_MODEL_FIELD_EQ(npluginstate);
@@ -1052,9 +1067,14 @@ void _unsafe_multi_ray_range(
     mjtNum* normal_env =
         normal_out ? normal_out + static_cast<size_t>(r) * vec_block : nullptr;
 
+#if MUJOCO_UNI_HAS_MULTIRAY_NORMAL
     mj_multiRay(me, d, pnt_env, vec_env, geomgroup, flg_static,
                 bodyexclude_env, geomid_env, dist_env, normal_env, nray,
                 cutoff);
+#else
+    mj_multiRay(me, d, pnt_env, vec_env, geomgroup, flg_static,
+                bodyexclude_env, geomid_env, dist_env, nray, cutoff);
+#endif
   }
 }
 
@@ -1691,6 +1711,12 @@ class BatchEnvPool {
     if (chunk_size.has_value() && *chunk_size <= 0) {
       throw py::value_error("chunk_size must be positive");
     }
+#if !MUJOCO_UNI_HAS_MULTIRAY_NORMAL
+    if (return_normal) {
+      throw py::value_error(
+          "multi_ray(return_normal=True) requires MuJoCo >= 3.5");
+    }
+#endif
 
     if (bodyexclude.ndim() != 1 ||
         (bodyexclude.shape(0) != 1 && bodyexclude.shape(0) != nbatch_)) {

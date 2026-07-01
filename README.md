@@ -78,7 +78,7 @@ Current release:
 
 ```text
 mujoco-uni==0.2.0
-mujoco>=3.8,<3.11
+mujoco>=3.4,<3.11
 ```
 
 The public metadata is available from Python:
@@ -99,6 +99,7 @@ build target.
 Version switching is environment-level:
 
 ```text
+env-mj34  -> mujoco==3.4.x  -> build/install mujoco-uni
 env-mj38  -> mujoco==3.8.x  -> build/install mujoco-uni
 env-mj310 -> mujoco==3.10.x -> build/install mujoco-uni
 ```
@@ -238,6 +239,13 @@ uv pip install "mujoco==3.10.0" pybind11 wheel
 uv pip install --force-reinstall --no-deps --no-build-isolation -e .
 ```
 
+After selecting a solver version, run local checks without an automatic sync if
+you want to preserve the already-built native target:
+
+```bash
+uv run --no-sync pytest -q
+```
+
 ## Validation
 
 Standalone checks:
@@ -250,19 +258,36 @@ uv run pytest -q
 Version-matrix checks:
 
 ```bash
-uv run python tools/version_matrix.py --versions 3.8.0 3.10.0
+uv run python tools/version_matrix.py --pytest
 ```
+
+The default matrix covers:
+
+```text
+3.4.0 3.5.0 3.6.0 3.7.0 3.8.0 3.8.1 3.9.0 3.10.0
+```
+
+Full UniLab task validation is separate from the quick package matrix:
+
+```bash
+uv run python tools/version_matrix.py --versions 3.8.0 3.10.0 --unilab
+uv run python tools/version_matrix.py --versions 3.8.0 3.10.0 --unilab-train
+```
+
+The `--unilab-train` mode runs a short one-iteration training smoke in each
+selected MuJoCo environment.
 
 UniLab integration checks:
 
 ```bash
 cd ../UniLab
 uv run pytest \
-  tests/base/test_mujoco_uni_package.py \
   tests/base/test_mujoco_batch_env_randomization.py \
   tests/base/test_mujoco_batch_env_jacobian.py \
   tests/base/backend/test_mujoco_site_jacobian.py \
-  tests/envs/locomotion/go2w/test_go2w_height_scan.py \
+  tests/envs/locomotion/test_go2_rough_height_scan.py \
+  tests/envs/locomotion/test_go2_footstand.py \
+  tests/envs/locomotion/test_go2_terrain_spawn.py \
   -q
 ```
 
