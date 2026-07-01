@@ -132,10 +132,10 @@ def _serial_forward(model: mujoco.MjModel, states: np.ndarray) -> np.ndarray:
   return out
 
 
-def test_wrong_mujoco_version_fails_before_batch_runtime_import() -> None:
+def test_unsupported_mujoco_version_fails_before_batch_runtime_import() -> None:
   code = """
 import mujoco
-mujoco.__version__ = "3.10.0"
+mujoco.__version__ = "2.3.7"
 try:
     from mujoco_uni.batch_env import BatchEnvPool
 except ImportError as exc:
@@ -150,7 +150,36 @@ raise SystemExit("expected ImportError")
       text=True,
   )
   assert result.returncode == 0, result.stdout + result.stderr
-  assert "targets official mujoco==3.8.0" in result.stdout
+  assert "supports official mujoco>=3.8,<3.11" in result.stdout
+
+
+def test_mujoco_build_runtime_mismatch_fails_fast() -> None:
+  from mujoco_uni.compiled import MUJOCO_BUILD_VERSION
+
+  assert MUJOCO_BUILD_VERSION is not None
+  fake_runtime = "3.10.0"
+  if str(MUJOCO_BUILD_VERSION).startswith("3.10."):
+    fake_runtime = "3.8.0"
+
+  code = f"""
+import mujoco
+mujoco.__version__ = {fake_runtime!r}
+try:
+    from mujoco_uni.batch_env import BatchEnvPool
+except ImportError as exc:
+    print(exc)
+    raise SystemExit(0)
+raise SystemExit("expected ImportError")
+"""
+  result = subprocess.run(
+      [sys.executable, "-c", code],
+      check=False,
+      capture_output=True,
+      text=True,
+  )
+  assert result.returncode == 0, result.stdout + result.stderr
+  assert "native batch extension was built against mujoco" in result.stdout
+  assert "Rebuild mujoco_uni inside the selected MuJoCo environment" in result.stdout
 
 
 def test_constructor_accepts_single_model_and_model_sequences() -> None:

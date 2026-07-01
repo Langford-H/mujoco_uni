@@ -77,8 +77,8 @@ MuJoCoUni has its own package version, independent of the MuJoCo solver version.
 Current release:
 
 ```text
-mujoco-uni==0.1.0
-mujoco==3.8.0
+mujoco-uni==0.2.0
+mujoco>=3.8,<3.11
 ```
 
 The public metadata is available from Python:
@@ -91,9 +91,20 @@ print(mujoco_uni.MUJOCO_VERSION)
 print(mujoco_uni.MUJOCO_VERSION_SPEC)
 ```
 
-MuJoCoUni fails fast if the loaded official `mujoco` package does not match the
-solver version targeted by this release, or if the required MuJoCo Python model
-pointer helpers are unavailable.
+MuJoCoUni supports one official MuJoCo solver version per Python environment.
+The native extension records the MuJoCo version used at build time, and the
+runtime fails fast if the loaded `mujoco` package does not match that native
+build target.
+
+Version switching is environment-level:
+
+```text
+env-mj38  -> mujoco==3.8.x  -> build/install mujoco-uni
+env-mj310 -> mujoco==3.10.x -> build/install mujoco-uni
+```
+
+The required MuJoCo Python model pointer helpers, `_address` and
+`_from_model_ptr`, are checked at import time.
 
 ## Roadmap
 
@@ -223,7 +234,7 @@ patch version. Rebuild after switching virtual environments, Python versions, or
 MuJoCo versions:
 
 ```bash
-uv pip install "mujoco==3.8.0" pybind11 wheel
+uv pip install "mujoco==3.10.0" pybind11 wheel
 uv pip install --force-reinstall --no-deps --no-build-isolation -e .
 ```
 
@@ -234,6 +245,12 @@ Standalone checks:
 ```bash
 uv run ruff check .
 uv run pytest -q
+```
+
+Version-matrix checks:
+
+```bash
+uv run python tools/version_matrix.py --versions 3.8.0 3.10.0
 ```
 
 UniLab integration checks:

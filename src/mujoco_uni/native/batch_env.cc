@@ -43,6 +43,10 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
+#ifndef MUJOCO_UNI_BUILD_MUJOCO_VERSION
+#define MUJOCO_UNI_BUILD_MUJOCO_VERSION "unknown"
+#endif
+
 namespace mujoco::python {
 
 namespace {
@@ -2165,6 +2169,7 @@ PYBIND11_MODULE(_batch_env, pymodule) {
     }
     return out;
   }();
+  pymodule.attr("MUJOCO_BUILD_VERSION") = MUJOCO_UNI_BUILD_MUJOCO_VERSION;
 }
 
 }  // namespace

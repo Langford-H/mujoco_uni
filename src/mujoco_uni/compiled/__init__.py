@@ -1,7 +1,7 @@
 """Native compiled MuJoCoUni extension boundary.
 
-This package stays lower-level than ``mujoco_uni.runtime``. Application code
-should normally import ``mujoco_uni.batch_env`` or ``mujoco_uni.runtime``.
+This package stays lower-level than ``mujoco_uni.runtime``. The stable public
+entry point is ``mujoco_uni.batch_env``.
 """
 
 from __future__ import annotations
@@ -30,10 +30,12 @@ except ImportError as exc:  # pragma: no cover - optional local extension.
     _batch_env = None  # type: ignore[assignment]
     NativeBatchEnvPool = None  # type: ignore[assignment]
     SUPPORTED_FIELDS: tuple[str, ...] = ()
+    MUJOCO_BUILD_VERSION = None
 else:
     _BATCH_IMPORT_ERROR = None
     NativeBatchEnvPool = _batch_env.BatchEnvPool
     SUPPORTED_FIELDS = tuple(_batch_env.SUPPORTED_FIELDS)
+    MUJOCO_BUILD_VERSION = str(_batch_env.MUJOCO_BUILD_VERSION)
 
 
 def batch_available() -> bool:
@@ -54,6 +56,7 @@ def require_native():
 
 __all__ = [
     "NativeBatchEnvPool",
+    "MUJOCO_BUILD_VERSION",
     "SUPPORTED_FIELDS",
     "batch_available",
     "batch_import_error",

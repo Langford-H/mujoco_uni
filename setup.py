@@ -13,6 +13,8 @@ class BuildExt(build_ext):
         import numpy
         import pybind11
 
+        self.force = True
+        build_mujoco_version = getattr(mujoco, "__version__", "unknown")
         mujoco_dir = Path(mujoco.__file__).resolve().parent
         lib_candidates = sorted(mujoco_dir.glob("libmujoco*"))
         if not lib_candidates:
@@ -27,6 +29,9 @@ class BuildExt(build_ext):
                     str(mujoco_dir / "include"),
                     str(Path(__file__).resolve().parent / "src" / "mujoco_uni" / "native"),
                 ]
+            )
+            ext.define_macros.append(
+                ("MUJOCO_UNI_BUILD_MUJOCO_VERSION", f'"{build_mujoco_version}"')
             )
             ext.extra_objects.append(str(libmujoco))
             if platform.system() == "Darwin":

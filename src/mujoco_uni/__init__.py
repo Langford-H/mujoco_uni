@@ -4,7 +4,14 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from .version import MUJOCO_VERSION, MUJOCO_VERSION_SPEC, __version__
+from .version import (
+    MUJOCO_DEFAULT_VERSION,
+    MUJOCO_MAX_VERSION_EXCLUSIVE,
+    MUJOCO_MIN_VERSION,
+    MUJOCO_VERSION,
+    MUJOCO_VERSION_SPEC,
+    __version__,
+)
 
 if TYPE_CHECKING:
     from .batch_env import SUPPORTED_FIELDS, BatchEnvPool
@@ -14,6 +21,9 @@ if TYPE_CHECKING:
 __all__ = [
     "__version__",
     "BatchEnvPool",
+    "MUJOCO_DEFAULT_VERSION",
+    "MUJOCO_MAX_VERSION_EXCLUSIVE",
+    "MUJOCO_MIN_VERSION",
     "MUJOCO_VERSION",
     "MUJOCO_VERSION_SPEC",
     "SUPPORTED_FIELDS",

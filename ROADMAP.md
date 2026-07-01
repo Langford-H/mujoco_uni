@@ -23,7 +23,7 @@ Scope:
 
 Purpose: make solver version choice explicit and manageable.
 
-Plan:
+Scope:
 
 - keep MuJoCoUni package version independent from MuJoCo solver version,
 - add a compatibility table:
@@ -35,6 +35,8 @@ MuJoCoUni version | supported mujoco version | status
 - support one official MuJoCo solver version per Python environment/process,
 - let UniLab select the intended MuJoCo/MuJoCoUni target at launch,
 - document the `uv` environment pattern for switching solver versions,
+- add a version-matrix test runner for separate MuJoCo environments,
+- add a native build-version watchdog to catch stale compiled extensions,
 - avoid requiring users to store multiple MuJoCo source repositories,
 - fail fast when the loaded `mujoco` package does not match the native adapter.
 

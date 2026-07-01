@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from mujoco_uni.compiled import batch_available, batch_import_error
+from mujoco_uni.compiled import MUJOCO_BUILD_VERSION, batch_available, batch_import_error
 
 if TYPE_CHECKING:
     from .batch import BatchEnvPool
@@ -27,6 +27,7 @@ def batch_diagnostics() -> dict[str, object]:
         "available": available,
         "batch_available": available,
         "batch_import_error": None if detail is None else str(detail),
+        "mujoco_build_version": MUJOCO_BUILD_VERSION,
     }
 
 

@@ -37,32 +37,59 @@ from typing import Any, Dict, Optional, Sequence, Union
 import mujoco
 import numpy as np
 
-from mujoco_uni.version import MUJOCO_VERSION, MUJOCO_VERSION_SPEC, __version__
+from mujoco_uni.version import (
+    MUJOCO_MAX_VERSION_EXCLUSIVE,
+    MUJOCO_MIN_VERSION,
+    MUJOCO_VERSION_SPEC,
+    __version__,
+)
 
 
-def _check_mujoco_compatibility() -> None:
-  version = getattr(mujoco, "__version__", "")
+def _parse_mujoco_version(version: str) -> tuple[int, int, int]:
   match = re.match(r"^(\d+)\.(\d+)\.(\d+)(?:\.|$)", version)
   if match is None:
     raise ImportError(f"Unsupported MuJoCo version string: {version!r}")
-  parsed = tuple(int(match.group(i)) for i in range(1, 4))
-  expected = tuple(int(part) for part in MUJOCO_VERSION.split("."))
-  if parsed != expected:
+  return tuple(int(match.group(i)) for i in range(1, 4))
+
+
+def _check_mujoco_python_compatibility() -> str:
+  version = getattr(mujoco, "__version__", "")
+  parsed = _parse_mujoco_version(version)
+  min_version = _parse_mujoco_version(MUJOCO_MIN_VERSION)
+  max_version = _parse_mujoco_version(MUJOCO_MAX_VERSION_EXCLUSIVE)
+  if parsed < min_version or parsed >= max_version:
     raise ImportError(
-        f"mujoco_uni {__version__} targets official mujoco{MUJOCO_VERSION_SPEC}; "
+        f"mujoco_uni {__version__} supports official mujoco{MUJOCO_VERSION_SPEC}; "
         f"found mujoco {version!r}"
     )
   if not hasattr(mujoco.MjModel, "_address"):
     raise ImportError("mujoco.MjModel._address is required by mujoco_uni")
   if not hasattr(mujoco.MjModel, "_from_model_ptr"):
     raise ImportError("mujoco.MjModel._from_model_ptr is required by mujoco_uni")
+  return version
 
 
-_check_mujoco_compatibility()
+def _check_native_build_compatibility(native, runtime_version: str) -> None:
+  build_version = getattr(native, "MUJOCO_BUILD_VERSION", "unknown")
+  if build_version == "unknown":
+    raise ImportError(
+        "MuJoCoUni native batch extension does not expose its MuJoCo build "
+        "version; rebuild the extension"
+    )
+  if _parse_mujoco_version(str(build_version)) != _parse_mujoco_version(runtime_version):
+    raise ImportError(
+        f"MuJoCoUni native batch extension was built against mujoco "
+        f"{build_version!r}, but loaded mujoco is {runtime_version!r}. "
+        "Rebuild mujoco_uni inside the selected MuJoCo environment."
+    )
+
+
+_runtime_mujoco_version = _check_mujoco_python_compatibility()
 
 from mujoco_uni.compiled import require_native
 
 _native = require_native()
+_check_native_build_compatibility(_native, _runtime_mujoco_version)
 
 
 SUPPORTED_FIELDS = tuple(_native.SUPPORTED_FIELDS)
