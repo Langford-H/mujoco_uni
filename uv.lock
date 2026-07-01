@@ -193,7 +193,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "mujoco", specifier = ">=3.8,<3.11" },
+    { name = "mujoco", specifier = ">=3.5,<3.11" },
     { name = "numpy" },
 ]
 

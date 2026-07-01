@@ -47,6 +47,12 @@
 #define MUJOCO_UNI_BUILD_MUJOCO_VERSION "unknown"
 #endif
 
+#ifndef mjVERSION_HEADER
+#define mjVERSION_HEADER 0
+#endif
+
+#define MUJOCO_UNI_HAS_TENDON_SPARSITY_COUNT (mjVERSION_HEADER >= 3006000)
+
 namespace mujoco::python {
 
 namespace {
@@ -355,7 +361,9 @@ bool SameModelDataLayout(const raw::MjModel* lhs, const raw::MjModel* rhs) {
   MJ_MODEL_FIELD_EQ(nJfv);
   MJ_MODEL_FIELD_EQ(neq);
   MJ_MODEL_FIELD_EQ(ntendon);
+#if MUJOCO_UNI_HAS_TENDON_SPARSITY_COUNT
   MJ_MODEL_FIELD_EQ(nJten);
+#endif
   MJ_MODEL_FIELD_EQ(nwrap);
   MJ_MODEL_FIELD_EQ(nsensordata);
   MJ_MODEL_FIELD_EQ(nmocap);

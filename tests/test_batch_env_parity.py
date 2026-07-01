@@ -135,7 +135,7 @@ def _serial_forward(model: mujoco.MjModel, states: np.ndarray) -> np.ndarray:
 def test_unsupported_mujoco_version_fails_before_batch_runtime_import() -> None:
   code = """
 import mujoco
-mujoco.__version__ = "3.7.0"
+mujoco.__version__ = "3.4.9"
 try:
     from mujoco_uni.batch_env import BatchEnvPool
 except ImportError as exc:
@@ -150,7 +150,7 @@ raise SystemExit("expected ImportError")
       text=True,
   )
   assert result.returncode == 0, result.stdout + result.stderr
-  assert "supports official mujoco>=3.8,<3.11" in result.stdout
+  assert "supports official mujoco>=3.5,<3.11" in result.stdout
 
 
 def test_mujoco_build_runtime_mismatch_fails_fast() -> None:

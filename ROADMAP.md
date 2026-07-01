@@ -43,6 +43,9 @@ MuJoCoUni version | supported mujoco version | status
 Target user model:
 
 ```text
+env-mj35  -> mujoco==3.5.x  -> mujoco-uni adapter for 3.5
+env-mj36  -> mujoco==3.6.x  -> mujoco-uni adapter for 3.6
+env-mj37  -> mujoco==3.7.x  -> mujoco-uni adapter for 3.7
 env-mj38  -> mujoco==3.8.x  -> mujoco-uni adapter for 3.8
 env-mj39  -> mujoco==3.9.x  -> mujoco-uni adapter for 3.9
 env-mj310 -> mujoco==3.10.x -> mujoco-uni adapter for 3.10
