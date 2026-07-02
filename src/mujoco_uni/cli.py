@@ -26,8 +26,27 @@ def _add_env_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--reinstall", action="store_true", help="Force reinstall/rebuild mujoco-uni.")
 
 
+def _env_kwargs(args: argparse.Namespace) -> dict[str, object]:
+    return {
+        "env_dir": args.env_dir,
+        "project": args.project,
+        "package_source": args.package_source,
+        "python_version": args.python,
+        "reinstall": args.reinstall,
+    }
+
+
+def _env_dict(env) -> dict[str, str]:
+    return {
+        "version": env.version,
+        "env_dir": str(env.env_dir),
+        "python": str(env.python),
+        "source": env.source,
+    }
+
+
 def _cmd_versions(args: argparse.Namespace) -> int:
-    roots = [Path(root) for root in args.root]
+    roots = [Path(root) for root in (args.root or [Path.cwd()])]
     envs = discover_mujoco_envs(roots, include_current=not args.no_current)
     selected = select_default_env(envs)
     if args.json:
@@ -36,23 +55,8 @@ def _cmd_versions(args: argparse.Namespace) -> int:
                 {
                     "version_spec": MUJOCO_VERSION_SPEC,
                     "preference": list(SUPPORTED_MUJOCO_MINOR_ORDER),
-                    "default": None
-                    if selected is None
-                    else {
-                        "version": selected.version,
-                        "env_dir": str(selected.env_dir),
-                        "python": str(selected.python),
-                        "source": selected.source,
-                    },
-                    "envs": [
-                        {
-                            "version": env.version,
-                            "env_dir": str(env.env_dir),
-                            "python": str(env.python),
-                            "source": env.source,
-                        }
-                        for env in envs
-                    ],
+                    "default": None if selected is None else _env_dict(selected),
+                    "envs": [_env_dict(env) for env in envs],
                 },
                 indent=2,
             )
@@ -74,11 +78,7 @@ def _cmd_versions(args: argparse.Namespace) -> int:
 def _cmd_prepare(args: argparse.Namespace) -> int:
     env = prepare_env(
         args.mujoco,
-        env_dir=args.env_dir,
-        project=args.project,
-        package_source=args.package_source,
-        python_version=args.python,
-        reinstall=args.reinstall,
+        **_env_kwargs(args),
     )
     print(f"prepared mujoco {env.version}: {env.python}")
     return 0
@@ -90,12 +90,8 @@ def _cmd_run(args: argparse.Namespace) -> int:
     return run_in_env(
         args.command,
         version=args.mujoco,
-        env_dir=args.env_dir,
-        project=args.project,
-        package_source=args.package_source,
-        python_version=args.python,
+        **_env_kwargs(args),
         prepare=not args.no_prepare,
-        reinstall=args.reinstall,
     )
 
 
@@ -104,7 +100,7 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command_name", required=True)
 
     versions = subparsers.add_parser("versions", help="List discovered MuJoCo versioned envs.")
-    versions.add_argument("--root", action="append", default=[str(Path.cwd())])
+    versions.add_argument("--root", action="append", default=None)
     versions.add_argument("--no-current", action="store_true")
     versions.add_argument("--json", action="store_true")
     versions.set_defaults(func=_cmd_versions)

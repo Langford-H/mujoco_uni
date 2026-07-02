@@ -35,6 +35,10 @@ CANONICAL_MUJOCO_VERSION_BY_MINOR = {
 }
 
 
+def _is_auto_request(version: str | None) -> bool:
+    return version is None or str(version).strip().lower() == "auto"
+
+
 @dataclass(frozen=True)
 class MuJoCoEnv:
     """A Python environment with a usable MuJoCo runtime installed."""
@@ -79,7 +83,7 @@ def canonical_mujoco_version(version: str | None) -> str:
     Three-component requests are preserved after range validation.
     """
 
-    if version is None or str(version).strip().lower() == "auto":
+    if _is_auto_request(version):
         version = MUJOCO_DEFAULT_VERSION
     requested = str(version).strip()
     parts = parse_version(requested)
@@ -206,14 +210,18 @@ def select_default_env(envs: Sequence[MuJoCoEnv]) -> MuJoCoEnv | None:
 
 
 def default_mujoco_version(envs: Sequence[MuJoCoEnv] | None = None) -> str:
-    selected = select_default_env(list(envs)) if envs is not None else select_default_env(discover_mujoco_envs())
+    selected = (
+        select_default_env(list(envs))
+        if envs is not None
+        else select_default_env(discover_mujoco_envs())
+    )
     return selected.version if selected is not None else MUJOCO_DEFAULT_VERSION
 
 
 def select_env(envs: Sequence[MuJoCoEnv], requested: str | None = None) -> MuJoCoEnv | None:
     """Select an existing environment by explicit request or default order."""
 
-    if requested is None or str(requested).strip().lower() == "auto":
+    if _is_auto_request(requested):
         return select_default_env(envs)
 
     requested_text = str(requested).strip()
@@ -233,6 +241,14 @@ def _default_package_source() -> str:
     if (root / "pyproject.toml").exists():
         return str(root)
     return f"mujoco-uni=={__version__}"
+
+
+def _env_search_roots(env_dir: str | os.PathLike[str] | None) -> list[Path]:
+    return [Path(env_dir).parent] if env_dir is not None else [Path.cwd()]
+
+
+def _install_base(python: Path) -> list[str | Path]:
+    return ["uv", "pip", "install", "--python", python]
 
 
 def verify_env(env: MuJoCoEnv) -> None:
@@ -258,14 +274,14 @@ def prepare_env(
 ) -> MuJoCoEnv:
     """Create or refresh a uv env for one exact MuJoCo solver version."""
 
-    requested_auto = version is None or str(version).strip().lower() == "auto"
     selected: MuJoCoEnv | None = None
-    if requested_auto:
+    if _is_auto_request(version):
         if env_dir is not None:
             selected = _env_from_dir(Path(env_dir))
         if selected is None:
-            roots = [Path(env_dir).parent] if env_dir is not None else [Path.cwd()]
-            selected = select_default_env(discover_mujoco_envs(roots, include_current=True))
+            selected = select_default_env(
+                discover_mujoco_envs(_env_search_roots(env_dir), include_current=True)
+            )
     exact_version = selected.version if selected is not None else canonical_mujoco_version(version)
     resolved_env_dir = (
         selected.env_dir
@@ -279,13 +295,7 @@ def prepare_env(
         requested_python = python_version or f"{sys.version_info.major}.{sys.version_info.minor}"
         _run(["uv", "venv", resolved_env_dir, "--python", requested_python])
 
-    install_base = [
-        "uv",
-        "pip",
-        "install",
-        "--python",
-        python,
-    ]
+    install_base = _install_base(python)
     _run(
         [
             *install_base,
@@ -358,7 +368,7 @@ def run_in_env(
             exact_env = _env_from_dir(Path(env_dir))
             envs = [] if exact_env is None else [exact_env]
         else:
-            envs = discover_mujoco_envs([Path.cwd()], include_current=True)
+            envs = discover_mujoco_envs(_env_search_roots(None), include_current=True)
         selected = select_env(envs, version)
         if selected is None:
             raise RuntimeError("No matching MuJoCo environment found; rerun without --no-prepare")
