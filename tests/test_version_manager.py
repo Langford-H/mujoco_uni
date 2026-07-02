@@ -12,6 +12,7 @@ from mujoco_uni.version_manager import (
     command_for_env,
     default_mujoco_version,
     discover_mujoco_envs,
+    prepare_env,
     run_in_env,
     select_default_env,
     select_env,
@@ -144,3 +145,40 @@ def test_run_in_env_no_prepare_uses_explicit_env_dir(
 
     assert result == 7
     assert recorded == [[str(python), "train.py"]]
+
+
+def test_prepare_env_uses_no_cache_for_local_package_source(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    env_dir = tmp_path / ".venv-mj310"
+    python = env_dir / "bin" / "python"
+    package_source = tmp_path / "mujoco_uni_source"
+    package_source.mkdir()
+    recorded: list[list[str]] = []
+
+    def fake_run(command, **_kwargs):
+        command = [str(part) for part in command]
+        recorded.append(command)
+        if command[:2] == ["uv", "venv"]:
+            python.parent.mkdir(parents=True)
+            python.write_text("")
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(version_manager, "_run", fake_run)
+    monkeypatch.setattr(version_manager, "verify_env", lambda _env: None)
+
+    prepare_env(
+        "3.10",
+        env_dir=env_dir,
+        package_source=package_source,
+        reinstall=True,
+    )
+
+    local_install = [
+        command
+        for command in recorded
+        if command and command[-1] == str(package_source)
+    ][0]
+    assert "--no-cache" in local_install
+    assert "-e" not in local_install

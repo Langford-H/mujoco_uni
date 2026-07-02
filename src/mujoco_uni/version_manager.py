@@ -305,6 +305,12 @@ def prepare_env(
     ]
     if reinstall:
         package_cmd.append("--force-reinstall")
+    package_path = Path(package_spec)
+    if package_path.exists():
+        # MuJoCoUni's native extension is tied to the MuJoCo runtime installed
+        # in the target environment. Avoid reusing a cached local wheel that may
+        # have been compiled against another MuJoCo version.
+        package_cmd.append("--no-cache")
     package_cmd.append(package_spec)
     _run(package_cmd)
 
