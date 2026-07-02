@@ -20,6 +20,9 @@ dependencies = [
     "numpy",
 ]
 
+[project.scripts]
+mujoco-uni = "mujoco_uni.cli:main"
+
 [tool.setuptools]
 package-dir = { "" = "src" }
 packages = ["mujoco_uni", "mujoco_uni.compiled", "mujoco_uni.native", "mujoco_uni.runtime"]

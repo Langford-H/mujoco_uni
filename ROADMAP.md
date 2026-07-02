@@ -26,14 +26,12 @@ Purpose: make solver version choice explicit and manageable.
 Scope:
 
 - keep MuJoCoUni package version independent from MuJoCo solver version,
-- add a compatibility table:
-
-```text
-MuJoCoUni version | supported mujoco version | status
-```
-
+- support `mujoco>=3.5,<3.11`,
 - support one official MuJoCo solver version per Python environment/process,
-- let UniLab select the intended MuJoCo/MuJoCoUni target at launch,
+- expose `mujoco-uni versions`, `prepare`, and `run` commands,
+- expose a Python version manager API for discovery, preparation, and spawning,
+- let UniLab select the intended MuJoCo/MuJoCoUni target before launch,
+- default discovered-version order: `3.8 > 3.10 > 3.9 > 3.7 > 3.6 > 3.5`,
 - document the `uv` environment pattern for switching solver versions,
 - add a version-matrix test runner for separate MuJoCo environments,
 - add a native build-version watchdog to catch stale compiled extensions,

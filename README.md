@@ -96,7 +96,9 @@ The native extension records the MuJoCo version used at build time, and the
 runtime fails fast if the loaded `mujoco` package does not match that native
 build target.
 
-Version switching is environment-level:
+Version switching is active but process-level: MuJoCoUni selects or prepares a
+versioned uv environment, then runs the target command in that environment
+before Python imports `mujoco`.
 
 ```text
 env-mj35  -> mujoco==3.5.x  -> build/install mujoco-uni
@@ -105,6 +107,41 @@ env-mj37  -> mujoco==3.7.x  -> build/install mujoco-uni
 env-mj38  -> mujoco==3.8.x  -> build/install mujoco-uni
 env-mj39  -> mujoco==3.9.x  -> build/install mujoco-uni
 env-mj310 -> mujoco==3.10.x -> build/install mujoco-uni
+```
+
+Default selection prefers discovered environments in this order:
+
+```text
+3.8 > 3.10 > 3.9 > 3.7 > 3.6 > 3.5
+```
+
+If no prepared environment is found, the default install target is `3.8.0`.
+
+CLI examples:
+
+```bash
+mujoco-uni versions
+mujoco-uni prepare --mujoco 3.10 --project ../UniLab
+mujoco-uni run --mujoco 3.10 --project ../UniLab -- \
+  python ../UniLab/scripts/train_rsl_rl.py task=go2_joystick_flat/mujoco
+```
+
+`prepare` installs MuJoCoUni as a built package inside the selected versioned
+environment. That keeps each native extension tied to one MuJoCo solver. UniLab
+can still be installed as an editable project on top of that environment.
+
+Python interface:
+
+```python
+import mujoco_uni
+
+env = mujoco_uni.prepare_env("3.10", project="../UniLab")
+mujoco_uni.run_in_env(
+    ["python", "../UniLab/scripts/train_rsl_rl.py", "task=go2_joystick_flat/mujoco"],
+    version=env.version,
+    env_dir=env.env_dir,
+    prepare=False,
+)
 ```
 
 The required MuJoCo Python model pointer helpers, `_address` and
@@ -123,6 +160,8 @@ and compiled artifacts:
 src/mujoco_uni/
   __init__.py
   version.py
+  version_manager.py       # MuJoCo version/env discovery and selection
+  cli.py                   # `mujoco-uni` command line
   batch_env.py              # Stable public facade
   runtime/
     batch.py                # Python API, validation, compatibility behavior
@@ -213,10 +252,10 @@ For a UniLab checkout using this sibling repository:
 
 ```toml
 [project.optional-dependencies]
-mujoco = ["mujoco-uni==0.1.0"]
+mujoco = ["mujoco-uni==0.2.0"]
 
 [tool.uv.sources]
-mujoco-uni = { path = "../mujoco_uni", editable = true }
+mujoco-uni = { path = "../mujoco_uni" }
 ```
 
 UniLab imports through its compatibility/backend layer, which in turn imports:
@@ -227,7 +266,8 @@ from mujoco_uni.batch_env import BatchEnvPool, SUPPORTED_FIELDS
 
 ## Rebuilding The Native Extension
 
-Editable installs generate a local extension such as:
+Editable installs are useful while developing MuJoCoUni in one environment.
+They generate a local extension such as:
 
 ```text
 src/mujoco_uni/compiled/_batch_env.cpython-313-darwin.so
@@ -273,8 +313,8 @@ The default matrix covers:
 Full UniLab task validation is separate from the quick package matrix:
 
 ```bash
-uv run python tools/version_matrix.py --versions 3.8.0 3.10.0 --unilab
-uv run python tools/version_matrix.py --versions 3.8.0 3.10.0 --unilab-train
+uv run python tools/version_matrix.py --versions 3.5.0 3.10.0 --unilab
+uv run python tools/version_matrix.py --versions 3.5.0 3.10.0 --unilab-train
 ```
 
 The `--unilab-train` mode runs a short one-iteration training smoke in each
