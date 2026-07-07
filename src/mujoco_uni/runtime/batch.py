@@ -34,15 +34,15 @@ import numbers
 import re
 from typing import Any, Dict, Optional, Sequence, Union
 
-import mujoco
 import numpy as np
 
-from mujoco_uni.version import (
-    MUJOCO_MAX_VERSION_EXCLUSIVE,
-    MUJOCO_MIN_VERSION,
-    MUJOCO_VERSION_SPEC,
-    __version__,
+from mujoco_uni.metadata import (
+  MUJOCO_MAX_VERSION_EXCLUSIVE,
+  MUJOCO_MIN_VERSION,
+  MUJOCO_VERSION_SPEC,
+  __version__,
 )
+from mujoco_uni.mujoco_runtime import api as mujoco
 
 
 def _parse_mujoco_version(version: str) -> tuple[int, int, int]:

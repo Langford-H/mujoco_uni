@@ -230,7 +230,7 @@ def run_version(
                     "-q",
                     "tests/test_batch_env.py",
                     "tests/test_batch_env_parity.py",
-                    "tests/test_version_manager.py",
+                    "tests/test_version_control.py",
                 ],
                 cwd=source,
             )

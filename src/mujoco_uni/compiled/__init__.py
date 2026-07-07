@@ -11,7 +11,7 @@ from pathlib import Path
 
 
 def _preload_mujoco_library() -> object | None:
-    import mujoco
+    from mujoco_uni.mujoco_runtime import api as mujoco
 
     mujoco_dir = Path(mujoco.__file__).resolve().parent
     candidates = sorted(mujoco_dir.glob("libmujoco*"))
