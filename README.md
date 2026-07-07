@@ -96,9 +96,10 @@ The native extension records the MuJoCo version used at build time, and the
 runtime fails fast if the loaded `mujoco` package does not match that native
 build target.
 
-Version switching is active but process-level: MuJoCoUni selects or prepares a
+Version switching is active but process-level: MuJoCoUni selects an existing
 versioned uv environment, then runs the target command in that environment
-before Python imports `mujoco`.
+before Python imports `mujoco`. Normal training launch does not create, install,
+or rebuild environments.
 
 ```text
 env-mj35  -> mujoco==3.5.x  -> build/install mujoco-uni
@@ -109,40 +110,31 @@ env-mj39  -> mujoco==3.9.x  -> build/install mujoco-uni
 env-mj310 -> mujoco==3.10.x -> build/install mujoco-uni
 ```
 
-Default selection prefers discovered environments in this order:
+Default and fallback selection prefer discovered environments in this order:
 
 ```text
 3.8 > 3.10 > 3.9 > 3.7 > 3.6 > 3.5
 ```
 
-If no prepared environment is found, the default install target is `3.8.0`.
+If the requested version is not found, MuJoCoUni prints a warning and falls back
+to the preferred existing environment. If no MuJoCo environment exists, launch
+fails with a clear setup error.
 
-CLI examples:
+For UniLab training, the normal task command is the only user-facing launcher.
+Set the process selector when running the command:
 
 ```bash
-mujoco-uni versions
-mujoco-uni prepare --mujoco 3.10 --project ../UniLab
-mujoco-uni run --mujoco 3.10 --project ../UniLab -- \
-  python ../UniLab/scripts/train_rsl_rl.py task=go2_joystick_flat/mujoco
+MUJOCO_UNI_VERSION=3.8 uv run train --algo ppo --task go2_joystick_flat --sim mujoco
+MUJOCO_UNI_VERSION=3.10 uv run train --algo ppo --task go2_joystick_flat --sim mujoco
 ```
 
-`prepare` installs MuJoCoUni as a built package inside the selected versioned
-environment. That keeps each native extension tied to one MuJoCo solver. UniLab
-can still be installed as an editable project on top of that environment.
+Unset `MUJOCO_UNI_VERSION` keeps the active Python environment behavior. Exact
+requests such as `3.8.0` require that exact runtime; minor requests such as
+`3.8` accept a compatible `3.8.x` runtime.
 
-Python interface:
-
-```python
-import mujoco_uni
-
-env = mujoco_uni.prepare_env("3.10", project="../UniLab")
-mujoco_uni.run_in_env(
-    ["python", "../UniLab/scripts/train_rsl_rl.py", "task=go2_joystick_flat/mujoco"],
-    version=env.version,
-    env_dir=env.env_dir,
-    prepare=False,
-)
-```
+MuJoCoUni owns the internal discovery and spawning services used by UniLab.
+Explicit environment preparation is a setup operation, not part of the normal
+training launch path.
 
 The required MuJoCo Python model pointer helpers, `_address` and
 `_from_model_ptr`, are checked at import time.
@@ -159,10 +151,11 @@ and compiled artifacts:
 ```text
 src/mujoco_uni/
   __init__.py
-  version.py
-  version_manager.py       # MuJoCo version/env discovery and selection
-  cli.py                   # `mujoco-uni` command line
-  batch_env.py              # Stable public facade
+  metadata.py              # MuJoCoUni package metadata and supported range
+  batch_env.py              # Stable public BatchEnvPool API
+  mujoco_runtime/
+    api.py                  # MuJoCoUni-owned access to official mujoco
+    version_control.py      # MuJoCo solver-version control
   runtime/
     batch.py                # Python API, validation, compatibility behavior
   compiled/
@@ -200,7 +193,7 @@ executors from a layer above `BatchEnvPool`.
 
 ## Public API
 
-The stable facade is `mujoco_uni.batch_env`.
+The stable public API is `mujoco_uni.batch_env`.
 
 Exported symbols:
 
