@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from typing import Any
@@ -202,6 +203,131 @@ def test_constructor_accepts_single_model_and_model_sequences() -> None:
     BatchEnvPool(model, nbatch=1, nthread=-1)
   with pytest.raises(ValueError):
     BatchEnvPool([model, model], nbatch=3, nthread=0)
+
+
+def test_default_numa_policy_is_off() -> None:
+  model = _model()
+  with BatchEnvPool(model, nbatch=2, nthread=2) as pool:
+    assert pool.numa_policy == "off"
+    assert pool.cpu_ids == ()
+    assert pool.first_touch is True
+    assert pool.partitions == ()
+    assert pool.worker_affinities == ()
+
+
+def test_numa_policy_validation() -> None:
+  model = _model()
+  with pytest.raises(ValueError, match="numa_policy"):
+    BatchEnvPool(model, nbatch=2, nthread=2, numa_policy="bad")
+  with pytest.raises(ValueError, match="requires cpu_ids"):
+    BatchEnvPool(model, nbatch=2, nthread=2, numa_policy="pin")
+  with pytest.raises(ValueError, match="length nthread"):
+    BatchEnvPool(model, nbatch=2, nthread=2, numa_policy="pin", cpu_ids=[0])
+  with pytest.raises(ValueError, match="requires nthread > 0"):
+    BatchEnvPool(model, nbatch=2, nthread=0, numa_policy="pin", cpu_ids=[])
+  with pytest.raises(ValueError, match="cpu_ids is only meaningful"):
+    BatchEnvPool(model, nbatch=2, nthread=2, cpu_ids=[0, 1])
+  with pytest.raises(ValueError, match="requires a partitions list"):
+    BatchEnvPool(model, nbatch=2, nthread=2, numa_policy="partitioned")
+  with pytest.raises(ValueError, match="cover"):
+    BatchEnvPool(
+        model,
+        nbatch=4,
+        numa_policy="partitioned",
+        partitions=[{"env_start": 0, "env_end": 3, "nthread": 1, "cpu_ids": [0]}],
+    )
+
+
+def test_partitioned_numa_step_and_forward_match_off_policy() -> None:
+  model = _model()
+  nbatch = 6
+  nstep = 4
+  allowed = sorted(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else []
+  if hasattr(os, "sched_getaffinity") and len(allowed) < 2:
+    pytest.skip("partitioned NUMA test requires at least two allowed CPUs")
+  cpu0, cpu1 = allowed[:2] if allowed else [0, 1]
+  states = _batched_states(model, nbatch)
+  ncontrol = mj.mj_stateSize(model, mj.mjtState.mjSTATE_CTRL)
+  control = np.zeros((nbatch, nstep, ncontrol), dtype=np.float64)
+  for i in range(nbatch):
+    control[i, :, 0] = np.linspace(0.03 * i, 0.03 * i + 0.1, nstep)
+
+  with BatchEnvPool(model, nbatch=nbatch, nthread=2) as off_pool:
+    expected_state, expected_sensor = off_pool.step(
+        states,
+        nstep=nstep,
+        control=control,
+        return_sensor=True,
+        chunk_size=1,
+    )
+    expected_forward = off_pool.forward(states, chunk_size=1)
+
+  partitions = [
+      {"env_start": 0, "env_end": 3, "nthread": 1, "cpu_ids": [cpu0]},
+      {"env_start": 3, "env_end": 6, "nthread": 1, "cpu_ids": [cpu1]},
+  ]
+  with BatchEnvPool(
+      model,
+      nbatch=nbatch,
+      numa_policy="partitioned",
+      partitions=partitions,
+      first_touch=False,
+  ) as part_pool:
+    assert part_pool.nthread == 2
+    assert part_pool.numa_policy == "partitioned"
+    assert part_pool.partitions == tuple(
+        {
+            "env_start": part["env_start"],
+            "env_end": part["env_end"],
+            "nthread": part["nthread"],
+            "cpu_ids": tuple(part["cpu_ids"]),
+        }
+        for part in partitions
+    )
+    got_state, got_sensor = part_pool.step(
+        states,
+        nstep=nstep,
+        control=control,
+        return_sensor=True,
+        chunk_size=1,
+    )
+    got_forward = part_pool.forward(states, chunk_size=1)
+
+  np.testing.assert_allclose(got_state, expected_state, atol=1e-12, rtol=0)
+  np.testing.assert_allclose(got_sensor, expected_sensor, atol=1e-12, rtol=0)
+  np.testing.assert_allclose(got_forward, expected_forward, atol=1e-12, rtol=0)
+
+
+def test_pin_numa_policy_reports_affinity_or_platform_fallback() -> None:
+  model = _model()
+  if not hasattr(os, "sched_getaffinity"):
+    with BatchEnvPool(
+        model,
+        nbatch=2,
+        nthread=2,
+        numa_policy="pin",
+        cpu_ids=[0, 1],
+        first_touch=False,
+    ) as pool:
+      assert pool.numa_policy == "pin"
+      assert pool.cpu_ids == (0, 1)
+      assert pool.worker_affinities == ()
+    return
+
+  allowed = sorted(os.sched_getaffinity(0))
+  if len(allowed) < 2:
+    pytest.skip("pin NUMA test requires at least two allowed CPUs")
+
+  cpu_ids = allowed[:2]
+  with BatchEnvPool(
+      model,
+      nbatch=2,
+      nthread=2,
+      numa_policy="pin",
+      cpu_ids=cpu_ids,
+      first_touch=False,
+  ) as pool:
+    assert pool.worker_affinities == tuple((cpu,) for cpu in cpu_ids)
 
 
 @pytest.mark.parametrize("nthread,chunk_size", [(0, None), (1, None), (2, 1), (2, 5)])

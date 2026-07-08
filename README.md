@@ -77,7 +77,7 @@ MuJoCoUni has its own package version, independent of the MuJoCo solver version.
 Current release:
 
 ```text
-mujoco-uni==0.2.0
+mujoco-uni==0.2.1
 mujoco>=3.5,<3.11
 ```
 
@@ -187,6 +187,17 @@ The hot path is native C++ calling the official MuJoCo C API. The pool uses:
 - disjoint output slots,
 - one synchronization point per batch operation.
 
+Server NUMA controls are available for large CPU machines:
+
+- `numa_policy="off"` keeps the historical unpinned local thread pool,
+- `numa_policy="pin"` pins each worker to an explicit CPU id on Linux,
+- `numa_policy="partitioned"` splits the environment range into contiguous
+  partitions, each with its own worker pool and `mjData` segment,
+- `first_touch=True` allocates worker `mjData` on the worker that will use it.
+
+These controls affect worker placement and memory locality. They do not alter
+the MuJoCo solver or split one MuJoCo environment solve across threads.
+
 There is no MPI or OpenMP inside the base `BatchEnvPool` executor. Large-scale
 multi-process, multi-socket, or multi-node collection composes multiple local
 executors from a layer above `BatchEnvPool`.
@@ -245,7 +256,7 @@ For a UniLab checkout using this sibling repository:
 
 ```toml
 [project.optional-dependencies]
-mujoco = ["mujoco-uni==0.2.0"]
+mujoco = ["mujoco-uni==0.2.1"]
 
 [tool.uv.sources]
 mujoco-uni = { path = "../mujoco_uni" }

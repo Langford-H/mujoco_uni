@@ -31,10 +31,31 @@ class ThreadPool {
   // constructor
   explicit ThreadPool(int num_threads);
 
+  // Constructor with optional per-worker CPU affinity. If worker_cpu_ids is
+  // non-empty, its size must equal num_threads (mismatch throws). On Linux
+  // each worker is pinned to its requested CPU via pthread_setaffinity_np;
+  // if the syscall fails the constructor throws std::runtime_error after
+  // joining any already-launched workers. Phase 1 acceptance requires
+  // "worker fixed on requested CPU" as a hard invariant, so silent
+  // fallback is only allowed on platforms without an affinity API (in
+  // that case WorkerAffinities() returns an empty vector so callers can
+  // detect the fallback).
+  ThreadPool(int num_threads, std::vector<int> worker_cpu_ids);
+
   // destructor
   ~ThreadPool();
 
   int NumThreads() const { return threads_.size(); }
+
+  // Per-worker observed CPU affinity mask read back after pinning. Empty
+  // outer vector means "no affinity information available" (either
+  // pinning was not requested, or the platform has no affinity API).
+  // On Linux, entry i is the set of CPU ids that pthread_getaffinity_np
+  // reported for worker i. Tests can assert
+  // WorkerAffinities()[i] == {worker_cpu_ids[i]}.
+  const std::vector<std::vector<int>>& WorkerAffinities() const {
+    return worker_affinities_;
+  }
 
   // returns an ID between 0 and NumThreads() - 1. must be called within
   // worker thread (returns -1 if not).
@@ -56,6 +77,24 @@ class ThreadPool {
     cv_ext_.wait(lock, [&]() { return this->GetCount() >= value; });
   }
 
+  // Run `fn(worker_id)` exactly once on every worker thread, then block until
+  // all workers have finished. Used for NUMA-local first-touch initialization
+  // so that per-worker memory (e.g. each worker's mjData) is allocated on the
+  // thread that will use it, after that thread has been pinned.
+  //
+  // Implemented as a barrier-gated fan-out: exactly NumThreads() tasks are
+  // scheduled, each keyed by its own WorkerId(). A task cannot complete until
+  // every worker id has entered the barrier, so no worker can pop a second
+  // task before a slower worker has run its first. This forces a strict 1:1
+  // worker<->task mapping (a plain "schedule N tasks" does NOT, because a fast
+  // worker may dequeue two while another sleeps). There are exactly
+  // NumThreads() tasks and NumThreads() workers, so all can be in flight at
+  // once and the barrier releases when the last arrives — no deadlock.
+  //
+  // Must not be called from within a worker thread. No-op when NumThreads()
+  // is 0.
+  void RunOnEachWorker(const std::function<void(int)>& fn);
+
  private:
   // ----- methods ----- //
 
@@ -66,6 +105,9 @@ class ThreadPool {
 
   // ----- members ----- //
   std::vector<std::thread> threads_;
+  // Observed CPU mask per worker after pinning. Outer size 0 means "no
+  // pinning attempted or platform has no affinity API".
+  std::vector<std::vector<int>> worker_affinities_;
   std::mutex m_;
   std::condition_variable cv_in_;
   std::condition_variable cv_ext_;

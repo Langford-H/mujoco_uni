@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"
 
 MUJOCO_DEFAULT_VERSION = "3.8.0"
 MUJOCO_MIN_VERSION = "3.5.0"

@@ -38,6 +38,9 @@ Scope:
 - add a native build-version watchdog to catch stale compiled extensions,
 - avoid requiring users to store multiple MuJoCo source repositories,
 - fail fast when the loaded `mujoco` package does not match the native adapter.
+- `v0.2.1`: align with upstream `uni/v3.8.0` server-performance commits by
+  adding optional Linux worker pinning, partitioned NUMA scheduling, and
+  first-touch `mjData` allocation without changing solver internals.
 
 Target user model:
 
